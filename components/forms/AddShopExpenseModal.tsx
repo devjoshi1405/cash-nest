@@ -1,28 +1,21 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Modal } from "@/components/shared/Modal";
-import { ShopExpense, ShopExpenseCategory } from "@/types/shop";
+import { ShopExpense } from "@/types/shop";
 import { PaymentMethod } from "@/types/common";
+import { Category } from "@/lib/supabase/types";
 import { toISODateString } from "@/lib/date";
+import { createShopExpense } from "@/lib/data/shop/expenses";
+import { getShopExpenseCategories } from "@/lib/data/shop/categories";
 import { toast } from "sonner";
 
 const shopExpenseSchema = z.object({
   title: z.string().min(2, "Expense title is required"),
-  category: z.enum([
-    "Rent",
-    "Electricity",
-    "Transport",
-    "Maintenance",
-    "Employee",
-    "Packaging",
-    "Equipment",
-    "Internet",
-    "Other",
-  ]),
+  categoryId: z.string().min(1, "Please select a category"),
   amount: z.number().positive("Amount must be greater than 0"),
   paymentMethod: z.enum(["Cash", "UPI", "Bank", "Credit Card", "Debit Card", "Other"]),
   date: z.string().min(1, "Date is required"),
@@ -34,20 +27,30 @@ type ShopExpenseFormValues = z.infer<typeof shopExpenseSchema>;
 export interface AddShopExpenseModalProps {
   isOpen: boolean;
   onClose: () => void;
+  workspaceId: string;
   onSuccess?: (expense: ShopExpense) => void;
 }
 
-export function AddShopExpenseModal({ isOpen, onClose, onSuccess }: AddShopExpenseModalProps) {
+export function AddShopExpenseModal({
+  isOpen,
+  onClose,
+  workspaceId,
+  onSuccess,
+}: AddShopExpenseModalProps) {
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [loadingCategories, setLoadingCategories] = useState(false);
+
   const {
     register,
     handleSubmit,
+    setValue,
     reset,
     formState: { errors, isSubmitting },
   } = useForm<ShopExpenseFormValues>({
     resolver: zodResolver(shopExpenseSchema),
     defaultValues: {
       title: "",
-      category: "Electricity",
+      categoryId: "",
       amount: 0,
       paymentMethod: "UPI",
       date: toISODateString(),
@@ -55,24 +58,51 @@ export function AddShopExpenseModal({ isOpen, onClose, onSuccess }: AddShopExpen
     },
   });
 
-  const onSubmit = (data: ShopExpenseFormValues) => {
-    const newExpense: ShopExpense = {
-      id: `sexp-${Date.now()}`,
-      title: data.title,
-      category: data.category as ShopExpenseCategory,
-      amount: Number(data.amount),
-      paymentMethod: data.paymentMethod as PaymentMethod,
-      date: data.date,
-      notes: data.notes,
-    };
-
-    if (onSuccess) {
-      onSuccess(newExpense);
+  useEffect(() => {
+    if (isOpen) {
+      setLoadingCategories(true);
+      getShopExpenseCategories(workspaceId)
+        .then((cats) => {
+          setCategories(cats);
+          if (cats.length > 0) {
+            setValue("categoryId", cats[0].id);
+          }
+        })
+        .finally(() => setLoadingCategories(false));
     }
+  }, [isOpen, workspaceId, setValue]);
 
-    toast.success(`Shop expense of ₹${data.amount} for "${data.title}" saved!`);
-    reset();
-    onClose();
+  const onSubmit = async (data: ShopExpenseFormValues) => {
+    const selectedCat = categories.find((c) => c.id === data.categoryId);
+    const categoryName = selectedCat?.name || "Other";
+
+    try {
+      const res = await createShopExpense(workspaceId, {
+        title: data.title,
+        categoryId: data.categoryId,
+        category: categoryName,
+        amount: Number(data.amount),
+        paymentMethod: data.paymentMethod as PaymentMethod,
+        date: data.date,
+        notes: data.notes?.trim(),
+      });
+
+      if (!res.success) {
+        toast.error(res.error || "Failed to save expense.");
+        return;
+      }
+
+      toast.success(`Shop expense of ₹${data.amount} for "${data.title}" saved!`);
+
+      if (res.expense && onSuccess) {
+        onSuccess(res.expense);
+      }
+
+      reset();
+      onClose();
+    } catch (err: any) {
+      toast.error(err?.message || "Unexpected error saving expense.");
+    }
   };
 
   return (
@@ -80,7 +110,7 @@ export function AddShopExpenseModal({ isOpen, onClose, onSuccess }: AddShopExpen
       isOpen={isOpen}
       onClose={onClose}
       title="Add Shop Operating Expense"
-      description="Record rent, helper wages, packaging, commercial power, or repair costs."
+      description="Record premise rent, helper wages, commercial power, repair or packaging overheads."
       maxWidth="md"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -90,7 +120,7 @@ export function AddShopExpenseModal({ isOpen, onClose, onSuccess }: AddShopExpen
           </label>
           <input
             type="text"
-            placeholder="e.g. Inverter battery servicing, Paper carry bags, Shop Rent"
+            placeholder="e.g. Commercial electricity bill, Carry bags, Refrigerator repair"
             {...register("title")}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
           />
@@ -104,6 +134,7 @@ export function AddShopExpenseModal({ isOpen, onClose, onSuccess }: AddShopExpen
             </label>
             <input
               type="number"
+              step="any"
               placeholder="500"
               {...register("amount", { valueAsNumber: true })}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white font-bold focus:outline-none"
@@ -113,22 +144,22 @@ export function AddShopExpenseModal({ isOpen, onClose, onSuccess }: AddShopExpen
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Category *
+              Expense Category *
             </label>
             <select
-              {...register("category")}
+              {...register("categoryId")}
+              disabled={loadingCategories}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
             >
-              <option value="Rent">Rent</option>
-              <option value="Electricity">Electricity</option>
-              <option value="Transport">Transport</option>
-              <option value="Maintenance">Maintenance</option>
-              <option value="Employee">Employee / Helper</option>
-              <option value="Packaging">Packaging</option>
-              <option value="Equipment">Equipment</option>
-              <option value="Internet">Internet / SIM</option>
-              <option value="Other">Other</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.icon ? `${c.icon} ` : ""}{c.name}
+                </option>
+              ))}
             </select>
+            {errors.categoryId && (
+              <p className="mt-1 text-xs text-rose-500">{errors.categoryId.message}</p>
+            )}
           </div>
         </div>
 
@@ -141,32 +172,35 @@ export function AddShopExpenseModal({ isOpen, onClose, onSuccess }: AddShopExpen
               {...register("paymentMethod")}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
             >
-              <option value="Cash">Cash</option>
-              <option value="UPI">UPI</option>
+              <option value="UPI">UPI (QR / PhonePe / GPay)</option>
+              <option value="Cash">Cash Drawer</option>
               <option value="Bank">Bank Transfer</option>
+              <option value="Debit Card">Debit Card</option>
+              <option value="Credit Card">Credit Card</option>
               <option value="Other">Other</option>
             </select>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Date *
+              Expense Date *
             </label>
             <input
               type="date"
               {...register("date")}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
             />
+            {errors.date && <p className="mt-1 text-xs text-rose-500">{errors.date.message}</p>}
           </div>
         </div>
 
         <div>
           <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-            Remarks (Optional)
+            Notes / Receipt Ref (Optional)
           </label>
           <input
             type="text"
-            placeholder="Additional notes..."
+            placeholder="e.g. Paid to electricity board counter"
             {...register("notes")}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
           />
@@ -183,9 +217,9 @@ export function AddShopExpenseModal({ isOpen, onClose, onSuccess }: AddShopExpen
           <button
             type="submit"
             disabled={isSubmitting}
-            className="rounded-lg bg-rose-600 hover:bg-rose-700 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer"
+            className="rounded-lg bg-rose-600 hover:bg-rose-700 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer disabled:opacity-50"
           >
-            Save Shop Expense
+            {isSubmitting ? "Saving..." : "Save Shop Expense"}
           </button>
         </div>
       </form>

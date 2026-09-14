@@ -1,8 +1,11 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { WorkspaceType } from "@/types/common";
+import { Workspace } from "@/lib/supabase/types";
+import { getWorkspaces } from "@/lib/data/workspaces";
+import { createClient } from "@/lib/supabase/client";
 
 interface WorkspaceContextType {
   workspace: WorkspaceType;
@@ -11,6 +14,10 @@ interface WorkspaceContextType {
   workspaceName: string;
   workspaceIcon: string;
   accentColor: string;
+  workspaceId?: string;
+  workspacesList: Workspace[];
+  isLoadingWorkspaces: boolean;
+  refetchWorkspaces: () => Promise<void>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefined);
@@ -18,18 +25,59 @@ const WorkspaceContext = createContext<WorkspaceContextType | undefined>(undefin
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [workspace, setWorkspaceState] = useState<WorkspaceType>("home");
 
-  useEffect(() => {
-    if (pathname.startsWith("/shop")) {
-      setWorkspaceState("shop");
-    } else if (pathname.startsWith("/home")) {
-      setWorkspaceState("home");
+  // Compute workspace type from URL
+  const activeType: WorkspaceType = pathname?.startsWith("/shop") ? "shop" : "home";
+  const [overrideWorkspace, setOverrideWorkspace] = useState<WorkspaceType | null>(null);
+  const workspace = overrideWorkspace ?? activeType;
+
+  const [workspacesList, setWorkspacesList] = useState<Workspace[]>([]);
+  const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(true);
+
+  const loadWorkspaces = useCallback(async () => {
+    try {
+      const data = await getWorkspaces();
+      if (data && data.length > 0) {
+        setWorkspacesList(data);
+      }
+    } catch (err) {
+      console.error("Failed to load workspaces from Supabase:", err);
+    } finally {
+      setIsLoadingWorkspaces(false);
     }
-  }, [pathname]);
+  }, []);
+
+  // Fetch workspaces on mount and subscribe to auth state changes
+  useEffect(() => {
+    let isMounted = true;
+    getWorkspaces().then((data) => {
+      if (isMounted && data && data.length > 0) {
+        setWorkspacesList(data);
+        setIsLoadingWorkspaces(false);
+      }
+    }).catch(() => {
+      if (isMounted) setIsLoadingWorkspaces(false);
+    });
+
+    const supabase = createClient();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_IN" || event === "USER_UPDATED") {
+        loadWorkspaces();
+      } else if (event === "SIGNED_OUT") {
+        setWorkspacesList([]);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, [loadWorkspaces]);
 
   const switchWorkspace = (targetWorkspace: WorkspaceType) => {
-    setWorkspaceState(targetWorkspace);
+    setOverrideWorkspace(targetWorkspace);
     if (targetWorkspace === "home") {
       router.push("/home/dashboard");
     } else {
@@ -37,19 +85,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const workspaceName = workspace === "home" ? "Home Finance" : "Pan Shop Finance";
-  const workspaceIcon = workspace === "home" ? "🏠" : "🏪";
+  const activeRecord = workspacesList.find((w) => w.type === workspace);
+  const workspaceName = activeRecord?.name || (workspace === "home" ? "Home Finance" : "Pan Shop Finance");
+  const workspaceIcon = activeRecord?.icon || (workspace === "home" ? "🏠" : "🏪");
   const accentColor = workspace === "home" ? "emerald" : "amber";
+  const workspaceId = activeRecord?.id;
 
   return (
     <WorkspaceContext.Provider
       value={{
         workspace,
-        setWorkspace: setWorkspaceState,
+        setWorkspace: (ws) => switchWorkspace(ws),
         switchWorkspace,
         workspaceName,
         workspaceIcon,
         accentColor,
+        workspaceId,
+        workspacesList,
+        isLoadingWorkspaces,
+        refetchWorkspaces: loadWorkspaces,
       }}
     >
       {children}

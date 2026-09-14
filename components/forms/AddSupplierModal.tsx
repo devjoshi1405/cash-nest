@@ -1,20 +1,21 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Modal } from "@/components/shared/Modal";
 import { Supplier } from "@/types/shop";
-import { toISODateString } from "@/lib/date";
+import { createShopSupplier, updateShopSupplier } from "@/lib/data/shop/suppliers";
+import { AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 const supplierSchema = z.object({
   name: z.string().min(2, "Supplier name is required"),
-  phone: z.string().min(10, "Valid phone number is required"),
-  category: z.string().min(1, "Category is required"),
+  phone: z.string().optional(),
   email: z.string().email("Valid email is required").optional().or(z.literal("")),
   address: z.string().optional(),
+  notes: z.string().optional(),
 });
 
 type SupplierFormValues = z.infer<typeof supplierSchema>;
@@ -22,6 +23,7 @@ type SupplierFormValues = z.infer<typeof supplierSchema>;
 export interface AddSupplierModalProps {
   isOpen: boolean;
   onClose: () => void;
+  workspaceId: string;
   onSuccess?: (supplier: Supplier) => void;
   initialData?: Supplier | null;
 }
@@ -29,9 +31,12 @@ export interface AddSupplierModalProps {
 export function AddSupplierModal({
   isOpen,
   onClose,
+  workspaceId,
   onSuccess,
   initialData,
 }: AddSupplierModalProps) {
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+
   const {
     register,
     handleSubmit,
@@ -42,58 +47,88 @@ export function AddSupplierModal({
     defaultValues: {
       name: "",
       phone: "",
-      category: "Beverages & Soft Drinks",
       email: "",
       address: "",
+      notes: "",
     },
   });
 
   React.useEffect(() => {
+    setDuplicateWarning(null);
     if (initialData) {
       reset({
         name: initialData.name,
-        phone: initialData.phone,
-        category: initialData.category,
+        phone: initialData.phone || "",
         email: initialData.email || "",
         address: initialData.address || "",
+        notes: initialData.notes || "",
       });
     } else {
       reset({
         name: "",
         phone: "",
-        category: "Beverages & Soft Drinks",
         email: "",
         address: "",
+        notes: "",
       });
     }
   }, [initialData, isOpen, reset]);
 
-  const onSubmit = (data: SupplierFormValues) => {
-    const supplier: Supplier = {
-      id: initialData ? initialData.id : `sup-${Date.now()}`,
-      name: data.name,
-      phone: data.phone,
-      category: data.category,
-      email: data.email || undefined,
-      address: data.address || undefined,
-      totalPurchases: initialData ? initialData.totalPurchases : 0,
-      totalPaid: initialData ? initialData.totalPaid : 0,
-      pendingAmount: initialData ? initialData.pendingAmount : 0,
-      lastPurchaseDate: initialData ? initialData.lastPurchaseDate : toISODateString(),
-      purchasesCount: initialData ? initialData.purchasesCount : 0,
-      paymentHistory: initialData ? initialData.paymentHistory : [],
-    };
+  const onSubmit = async (data: SupplierFormValues) => {
+    try {
+      if (initialData) {
+        const res = await updateShopSupplier(initialData.id, workspaceId, {
+          name: data.name,
+          phone: data.phone,
+          email: data.email,
+          address: data.address,
+          notes: data.notes,
+        });
 
-    if (onSuccess) {
-      onSuccess(supplier);
+        if (!res.success) {
+          toast.error(res.error || "Failed to update supplier.");
+          return;
+        }
+
+        if (res.warning) {
+          toast.warning(res.warning);
+        } else {
+          toast.success(`Supplier "${data.name}" updated successfully!`);
+        }
+
+        if (res.supplier && onSuccess) {
+          onSuccess(res.supplier);
+        }
+      } else {
+        const res = await createShopSupplier(workspaceId, {
+          name: data.name,
+          phone: data.phone,
+          email: data.email,
+          address: data.address,
+          notes: data.notes,
+        });
+
+        if (!res.success) {
+          toast.error(res.error || "Failed to create supplier.");
+          return;
+        }
+
+        if (res.warning) {
+          toast.warning(res.warning);
+        } else {
+          toast.success(`Supplier "${data.name}" added successfully!`);
+        }
+
+        if (res.supplier && onSuccess) {
+          onSuccess(res.supplier);
+        }
+      }
+
+      reset();
+      onClose();
+    } catch (err: any) {
+      toast.error(err?.message || "Unexpected error saving supplier.");
     }
-
-    toast.success(
-      initialData
-        ? `Supplier "${data.name}" updated successfully!`
-        : `Supplier "${data.name}" added successfully!`
-    );
-    onClose();
   };
 
   return (
@@ -101,17 +136,24 @@ export function AddSupplierModal({
       isOpen={isOpen}
       onClose={onClose}
       title={initialData ? "Edit Supplier" : "Add Vendor / Supplier"}
-      description="Save distributor contact details and product category."
+      description="Save distributor contact details and shop delivery terms."
       maxWidth="md"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        {duplicateWarning && (
+          <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+            <span>{duplicateWarning}</span>
+          </div>
+        )}
+
         <div>
           <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
             Supplier / Distributor Name *
           </label>
           <input
             type="text"
-            placeholder="e.g. Raj Cold Drinks & Beverages"
+            placeholder="e.g. Raj Cold Drinks & Beverages, Balaji Snacks"
             {...register("name")}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
           />
@@ -121,7 +163,7 @@ export function AddSupplierModal({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Phone Number *
+              Phone Number (Optional)
             </label>
             <input
               type="text"
@@ -129,38 +171,20 @@ export function AddSupplierModal({
               {...register("phone")}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
             />
-            {errors.phone && <p className="mt-1 text-xs text-rose-500">{errors.phone.message}</p>}
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Supply Category *
+              Email Address (Optional)
             </label>
-            <select
-              {...register("category")}
+            <input
+              type="email"
+              placeholder="distributor.sales@gmail.com"
+              {...register("email")}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
-            >
-              <option value="Beverages & Soft Drinks">Beverages & Soft Drinks</option>
-              <option value="Chips & Farsan">Chips & Farsan</option>
-              <option value="Dairy & Ice Creams">Dairy & Ice Creams</option>
-              <option value="Pan Ingredients & Spices">Pan Ingredients & Spices</option>
-              <option value="Chocolates & Candies">Chocolates & Candies</option>
-              <option value="Water Bottles">Water Bottles</option>
-              <option value="Packaging & Misc">Packaging & Misc</option>
-            </select>
+            />
+            {errors.email && <p className="mt-1 text-xs text-rose-500">{errors.email.message}</p>}
           </div>
-        </div>
-
-        <div>
-          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-            Email Address (Optional)
-          </label>
-          <input
-            type="email"
-            placeholder="distributor.sales@gmail.com"
-            {...register("email")}
-            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
-          />
         </div>
 
         <div>
@@ -171,6 +195,18 @@ export function AddSupplierModal({
             type="text"
             placeholder="e.g. Market Yard Gate 2, Pune"
             {...register("address")}
+            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+            Notes / Payment Terms (Optional)
+          </label>
+          <input
+            type="text"
+            placeholder="e.g. Weekly payment on Saturday, 5% return discount"
+            {...register("notes")}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
           />
         </div>
@@ -186,9 +222,9 @@ export function AddSupplierModal({
           <button
             type="submit"
             disabled={isSubmitting}
-            className="rounded-lg bg-slate-900 dark:bg-white dark:text-slate-900 hover:bg-slate-800 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer"
+            className="rounded-lg bg-slate-900 dark:bg-white dark:text-slate-900 hover:bg-slate-800 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer disabled:opacity-50"
           >
-            {initialData ? "Update Supplier" : "Save Supplier"}
+            {isSubmitting ? "Saving..." : initialData ? "Update Supplier" : "Save Supplier"}
           </button>
         </div>
       </form>

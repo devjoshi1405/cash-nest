@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { usePathname } from "next/navigation";
 import { AppSidebar } from "./AppSidebar";
 import { Header } from "./Header";
 import { MobileNav } from "./MobileNav";
@@ -11,6 +12,32 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const { resolvedTheme } = useTheme();
+  const pathname = usePathname();
+
+  const isAuthPage =
+    pathname?.startsWith("/login") ||
+    pathname?.startsWith("/signup") ||
+    pathname?.startsWith("/forgot-password") ||
+    pathname?.startsWith("/reset-password") ||
+    pathname?.startsWith("/auth");
+
+  if (isAuthPage) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 transition-colors flex flex-col justify-center">
+        <Toaster
+          position="top-right"
+          richColors
+          theme={resolvedTheme}
+          toastOptions={{
+            style: {
+              borderRadius: "12px",
+            },
+          }}
+        />
+        {children}
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-slate-50 dark:bg-[#090d16] text-slate-900 dark:text-slate-100 transition-colors">
