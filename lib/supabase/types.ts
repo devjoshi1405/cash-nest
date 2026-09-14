@@ -11,6 +11,7 @@ export type Budget = Database["public"]["Tables"]["budgets"]["Row"];
 export type DailySale = Database["public"]["Tables"]["daily_sales"]["Row"];
 export type Supplier = Database["public"]["Tables"]["suppliers"]["Row"];
 export type Purchase = Database["public"]["Tables"]["purchases"]["Row"];
+export type PurchaseItem = Database["public"]["Tables"]["purchase_items"]["Row"];
 export type SupplierPayment = Database["public"]["Tables"]["supplier_payments"]["Row"];
 export type Product = Database["public"]["Tables"]["products"]["Row"];
 export type InventoryMovement = Database["public"]["Tables"]["inventory_movements"]["Row"];

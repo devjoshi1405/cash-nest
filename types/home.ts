@@ -177,7 +177,7 @@ export interface MonthlyComparison {
 }
 
 export interface ExpenseCategoryDistribution {
-  category: HomeExpenseCategory;
+  category: HomeExpenseCategory | string;
   amount: number;
   percentage: number;
   color?: string;

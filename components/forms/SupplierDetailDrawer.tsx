@@ -6,7 +6,7 @@ import { Supplier, PurchaseRecord } from "@/types/shop";
 import { formatINR } from "@/lib/currency";
 import { formatDate } from "@/lib/date";
 import { StatusBadge } from "@/components/shared/StatusBadge";
-import { Phone, Mail, MapPin, Plus, CreditCard, Receipt, Clock } from "lucide-react";
+import { Phone, Mail, MapPin, Plus, CreditCard, Receipt, Clock, Edit2, Trash2 } from "lucide-react";
 
 export interface SupplierDetailDrawerProps {
   isOpen: boolean;
@@ -15,6 +15,8 @@ export interface SupplierDetailDrawerProps {
   purchases: PurchaseRecord[];
   onAddPurchase: (supplier: Supplier) => void;
   onRecordPayment: (supplier: Supplier) => void;
+  onEditSupplier?: (supplier: Supplier) => void;
+  onDeleteSupplier?: (supplier: Supplier) => void;
 }
 
 export function SupplierDetailDrawer({
@@ -24,6 +26,8 @@ export function SupplierDetailDrawer({
   purchases,
   onAddPurchase,
   onRecordPayment,
+  onEditSupplier,
+  onDeleteSupplier,
 }: SupplierDetailDrawerProps) {
   if (!supplier) return null;
 
@@ -36,16 +40,18 @@ export function SupplierDetailDrawer({
       isOpen={isOpen}
       onClose={onClose}
       title={supplier.name}
-      description={supplier.category}
+      description={supplier.isActive ? "Active Wholesale Supplier" : "Archived Supplier"}
       width="lg"
     >
       <div className="space-y-6">
         {/* Contact info */}
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 p-4 space-y-2 text-xs text-slate-600 dark:text-slate-300">
-          <div className="flex items-center gap-2">
-            <Phone className="h-4 w-4 text-slate-400 shrink-0" />
-            <span className="font-semibold text-slate-900 dark:text-white">{supplier.phone}</span>
-          </div>
+          {supplier.phone && (
+            <div className="flex items-center gap-2">
+              <Phone className="h-4 w-4 text-slate-400 shrink-0" />
+              <span className="font-semibold text-slate-900 dark:text-white">{supplier.phone}</span>
+            </div>
+          )}
           {supplier.email && (
             <div className="flex items-center gap-2">
               <Mail className="h-4 w-4 text-slate-400 shrink-0" />
@@ -56,6 +62,12 @@ export function SupplierDetailDrawer({
             <div className="flex items-center gap-2">
               <MapPin className="h-4 w-4 text-slate-400 shrink-0" />
               <span>{supplier.address}</span>
+            </div>
+          )}
+          {supplier.notes && (
+            <div className="pt-2 border-t border-slate-200/60 dark:border-slate-700/60 text-slate-500">
+              <span className="font-semibold text-slate-700 dark:text-slate-300">Notes: </span>
+              {supplier.notes}
             </div>
           )}
         </div>
@@ -107,6 +119,35 @@ export function SupplierDetailDrawer({
           </button>
         </div>
 
+        {/* Edit / Archive Row */}
+        <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+          {onEditSupplier && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onEditSupplier(supplier);
+              }}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
+            >
+              <Edit2 className="h-3.5 w-3.5" /> Edit Details
+            </button>
+          )}
+
+          {onDeleteSupplier && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onDeleteSupplier(supplier);
+              }}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-600 dark:text-rose-400 hover:text-rose-700"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> {supplier.isActive ? "Archive / Delete" : "Delete"}
+            </button>
+          )}
+        </div>
+
         {/* Purchase History */}
         <div className="space-y-3">
           <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -129,16 +170,20 @@ export function SupplierDetailDrawer({
                       <StatusBadge status={bill.paymentStatus} />
                     </div>
                     <span className="text-[11px] text-slate-400 mt-0.5 block">
-                      {formatDate(bill.purchaseDate)} • {bill.notes || "Stock delivery"}
+                      {formatDate(bill.purchaseDate)} {bill.notes ? `• ${bill.notes}` : ""}
                     </span>
                   </div>
                   <div className="text-right">
                     <span className="font-bold text-slate-900 dark:text-white block">
                       {formatINR(bill.totalAmount)}
                     </span>
-                    {bill.remainingAmount > 0 && (
+                    {bill.remainingAmount > 0 ? (
                       <span className="text-[10px] text-rose-500 font-semibold">
                         Rem: {formatINR(bill.remainingAmount)}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-emerald-500 font-semibold">
+                        Paid in Full
                       </span>
                     )}
                   </div>

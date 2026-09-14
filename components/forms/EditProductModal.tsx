@@ -1,17 +1,17 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Modal } from "@/components/shared/Modal";
 import { Product, ProductInput, COMMON_PAN_SHOP_CATEGORIES, COMMON_PRODUCT_UNITS } from "@/types/inventory";
-import { createProduct } from "@/lib/data/shop/products";
+import { updateProduct } from "@/lib/data/shop/products";
 import { toast } from "sonner";
-import { AlertCircle, AlertTriangle, CheckCircle2, TrendingUp } from "lucide-react";
+import { AlertTriangle, Info, TrendingUp } from "lucide-react";
 import { formatINR } from "@/lib/currency";
 
-const productSchema = z.object({
+const editProductSchema = z.object({
   name: z.string().min(2, "Product name must be at least 2 characters"),
   category: z.string().min(1, "Category is required"),
   customCategory: z.string().optional(),
@@ -19,28 +19,30 @@ const productSchema = z.object({
   customUnit: z.string().optional(),
   purchasePrice: z.number().min(0, "Purchase cost cannot be negative"),
   sellingPrice: z.number().min(0, "Selling MRP cannot be negative"),
-  openingStock: z.number().min(0, "Opening stock cannot be negative"),
   lowStockThreshold: z.number().min(0, "Low stock limit cannot be negative"),
-  notes: z.string().optional(),
 });
 
-type ProductFormValues = z.infer<typeof productSchema>;
+type EditProductFormValues = z.infer<typeof editProductSchema>;
 
-export interface AddProductModalProps {
+export interface EditProductModalProps {
   isOpen: boolean;
   onClose: () => void;
   workspaceId: string;
+  product: Product | null;
   onSuccess?: (product: Product) => void;
   existingCategories?: string[];
+  onOpenAdjustStock?: (product: Product) => void;
 }
 
-export function AddProductModal({
+export function EditProductModal({
   isOpen,
   onClose,
   workspaceId,
+  product,
   onSuccess,
   existingCategories = [],
-}: AddProductModalProps) {
+  onOpenAdjustStock,
+}: EditProductModalProps) {
   const [submitting, setSubmitting] = useState(false);
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [isCustomUnit, setIsCustomUnit] = useState(false);
@@ -51,99 +53,87 @@ export function AddProductModal({
     watch,
     reset,
     formState: { errors },
-  } = useForm<ProductFormValues>({
-    resolver: zodResolver(productSchema),
-    defaultValues: {
-      name: "",
-      category: "Cold Drinks",
-      customCategory: "",
-      unit: "Bottle",
-      customUnit: "",
-      purchasePrice: 30,
-      sellingPrice: 40,
-      openingStock: 24,
-      lowStockThreshold: 5,
-      notes: "",
-    },
+  } = useForm<EditProductFormValues>({
+    resolver: zodResolver(editProductSchema),
   });
 
   const purchasePrice = watch("purchasePrice") ?? 0;
   const sellingPrice = watch("sellingPrice") ?? 0;
-  const openingStock = watch("openingStock") ?? 0;
-  const selectedCategory = watch("category");
-  const selectedUnit = watch("unit");
 
   const unitMargin = Math.round((Number(sellingPrice) - Number(purchasePrice)) * 100) / 100;
   const marginPercentage =
     Number(purchasePrice) > 0
       ? Math.round(((Number(sellingPrice) - Number(purchasePrice)) / Number(purchasePrice)) * 1000) / 10
       : 0;
-  const isLossWarning = Number(sellingPrice) > 0 && Number(purchasePrice) > 0 && Number(sellingPrice) < Number(purchasePrice);
-  const openingStockValue = Math.round(Number(openingStock) * Number(purchasePrice) * 100) / 100;
+  const isLossWarning =
+    Number(sellingPrice) > 0 &&
+    Number(purchasePrice) > 0 &&
+    Number(sellingPrice) < Number(purchasePrice);
 
-  React.useEffect(() => {
-    if (isOpen) {
+  useEffect(() => {
+    if (product && isOpen) {
+      const isCustomCat = !COMMON_PAN_SHOP_CATEGORIES.includes(product.category as any);
+      const isCustomU = !COMMON_PRODUCT_UNITS.includes(product.unit as any);
+
       reset({
-        name: "",
-        category: "Cold Drinks",
-        customCategory: "",
-        unit: "Bottle",
-        customUnit: "",
-        purchasePrice: 30,
-        sellingPrice: 40,
-        openingStock: 24,
-        lowStockThreshold: 5,
-        notes: "",
+        name: product.name,
+        category: isCustomCat ? "custom_new" : product.category,
+        customCategory: isCustomCat ? product.category : "",
+        unit: isCustomU ? "custom_unit" : product.unit,
+        customUnit: isCustomU ? product.unit : "",
+        purchasePrice: product.purchasePrice,
+        sellingPrice: product.sellingPrice,
+        lowStockThreshold: product.lowStockThreshold,
       });
-      setIsCustomCategory(false);
-      setIsCustomUnit(false);
-    }
-  }, [isOpen, reset]);
 
-  // Combine standard and existing categories without duplicates
+      setIsCustomCategory(isCustomCat);
+      setIsCustomUnit(isCustomU);
+    }
+  }, [product, isOpen, reset]);
+
+  if (!product) return null;
+
   const allCategoryOptions = Array.from(
     new Set([...COMMON_PAN_SHOP_CATEGORIES, ...existingCategories])
   ).sort();
 
-  const onSubmit = async (data: ProductFormValues) => {
+  const onSubmit = async (data: EditProductFormValues) => {
     if (!workspaceId) {
       toast.error("Shop workspace context is required.");
       return;
     }
 
     const finalCategory = isCustomCategory
-      ? (data.customCategory?.trim() || "Other")
+      ? data.customCategory?.trim() || "Other"
       : data.category;
     const finalUnit = isCustomUnit
-      ? (data.customUnit?.trim() || "Piece")
+      ? data.customUnit?.trim() || "Piece"
       : data.unit;
 
-    const payload: ProductInput = {
+    const payload: Partial<ProductInput> = {
       name: data.name.trim(),
       category: finalCategory,
       unit: finalUnit,
       purchasePrice: Number(data.purchasePrice),
       sellingPrice: Number(data.sellingPrice),
-      openingStock: Number(data.openingStock),
       lowStockThreshold: Number(data.lowStockThreshold),
-      notes: data.notes?.trim() || undefined,
     };
 
     setSubmitting(true);
     try {
-      const res = await createProduct(workspaceId, payload);
+      const res = await updateProduct(product.id, workspaceId, payload);
       if (!res.success || !res.product) {
-        toast.error(res.error || "Failed to create product.");
+        toast.error(res.error || "Failed to update product.");
         return;
       }
 
-      toast.success(`Product "${res.product.name}" added with ${res.product.currentStock} ${res.product.unit} opening stock.`);
+      toast.success(`Product "${res.product.name}" updated successfully.`);
       if (onSuccess) {
         onSuccess(res.product);
       }
       onClose();
     } catch (err) {
-      toast.error("An unexpected error occurred while saving product.");
+      toast.error("An unexpected error occurred while updating product.");
     } finally {
       setSubmitting(false);
     }
@@ -153,8 +143,8 @@ export function AddProductModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Add Inventory Product"
-      description="Create retail inventory item, wholesale cost, selling MRP, and initial stock count."
+      title="Edit Product Details"
+      description={`Update pricing, packaging and thresholds for "${product.name}".`}
       maxWidth="lg"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -165,9 +155,8 @@ export function AddProductModal({
           </label>
           <input
             type="text"
-            placeholder="e.g. Thums Up 750ml, Balaji Simply Salted 50g, Rajnigandha 6g"
             {...register("name")}
-            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-amber-500"
+            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
           />
           {errors.name && <p className="mt-1 text-xs text-rose-500">{errors.name.message}</p>}
         </div>
@@ -207,7 +196,6 @@ export function AddProductModal({
                   type="button"
                   onClick={() => setIsCustomCategory(false)}
                   className="px-2 py-2 text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
-                  title="Choose from existing categories"
                 >
                   Cancel
                 </button>
@@ -248,7 +236,6 @@ export function AddProductModal({
                   type="button"
                   onClick={() => setIsCustomUnit(false)}
                   className="px-2 py-2 text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
-                  title="Choose standard unit"
                 >
                   Cancel
                 </button>
@@ -257,7 +244,7 @@ export function AddProductModal({
           </div>
         </div>
 
-        {/* Pricing Row: Purchase Cost & Selling MRP */}
+        {/* Pricing Row */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -267,7 +254,6 @@ export function AddProductModal({
               type="number"
               step="any"
               min="0"
-              placeholder="32"
               {...register("purchasePrice", { valueAsNumber: true })}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
             />
@@ -284,7 +270,6 @@ export function AddProductModal({
               type="number"
               step="any"
               min="0"
-              placeholder="40"
               {...register("sellingPrice", { valueAsNumber: true })}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-emerald-600 dark:text-emerald-400 font-bold focus:outline-none focus:ring-1 focus:ring-amber-500"
             />
@@ -294,7 +279,7 @@ export function AddProductModal({
           </div>
         </div>
 
-        {/* Estimated Margin Preview Bar */}
+        {/* Margin Preview */}
         <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-900/80 border border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs">
           <div className="flex items-center gap-2">
             <TrendingUp className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
@@ -314,38 +299,21 @@ export function AddProductModal({
           </div>
         </div>
 
-        {/* Loss Warning Banner (Non-blocking) */}
+        {/* Warning if loss */}
         {isLossWarning && (
           <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 flex items-start gap-2.5 text-xs text-amber-900 dark:text-amber-200">
             <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
             <div>
               <p className="font-semibold">Selling price is lower than purchase price.</p>
               <p className="text-[11px] opacity-80 mt-0.5">
-                Selling at ₹{sellingPrice} while costing ₹{purchasePrice} results in a loss of ₹{Math.abs(unitMargin)} per unit. You can still proceed if this is intended for promotions.
+                Selling at ₹{sellingPrice} while costing ₹{purchasePrice} results in a loss of ₹{Math.abs(unitMargin)} per unit.
               </p>
             </div>
           </div>
         )}
 
-        {/* Stock Row: Opening Stock & Low Stock Threshold */}
+        {/* Low Stock Limit & Stock Notice */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Opening Stock Count *
-            </label>
-            <input
-              type="number"
-              step="any"
-              min="0"
-              placeholder="24"
-              {...register("openingStock", { valueAsNumber: true })}
-              className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white font-semibold focus:outline-none focus:ring-1 focus:ring-amber-500"
-            />
-            <p className="text-[10px] text-slate-400 mt-1">
-              Initial Valuation: {formatINR(openingStockValue)}
-            </p>
-          </div>
-
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
               Low Stock Alert Limit
@@ -354,27 +322,48 @@ export function AddProductModal({
               type="number"
               step="any"
               min="0"
-              placeholder="5"
               {...register("lowStockThreshold", { valueAsNumber: true })}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
             />
-            <p className="text-[10px] text-slate-400 mt-1">
-              Triggers re-order notification when stock &le; limit
-            </p>
+          </div>
+
+          <div className="p-3 rounded-lg bg-slate-100/60 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 flex flex-col justify-between text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-500 dark:text-slate-400">Current Stock:</span>
+              <span className="font-bold text-slate-900 dark:text-white">
+                {product.currentStock} {product.unit}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[11px] mt-1 pt-1 border-t border-slate-200 dark:border-slate-700">
+              <span className="text-slate-400">Inventory Value:</span>
+              <span className="font-semibold text-slate-700 dark:text-slate-300">
+                {formatINR(product.inventoryValue)}
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* Notes */}
-        <div>
-          <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-            Notes / Batch Info (Optional)
-          </label>
-          <input
-            type="text"
-            placeholder="e.g. Shelf rack A2, Expiry Jan 2027"
-            {...register("notes")}
-            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
-          />
+        {/* Stock Mutation Rule Info Alert */}
+        <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 flex items-start gap-2.5 text-xs text-blue-900 dark:text-blue-200">
+          <Info className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="font-semibold">Stock quantity cannot be edited directly.</p>
+            <p className="text-[11px] opacity-80 mt-0.5">
+              To preserve complete movement history, use <strong>Adjust Stock</strong> or <strong>Stock Count Reconciliation</strong> to modify quantities.
+            </p>
+          </div>
+          {onOpenAdjustStock && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenAdjustStock(product);
+              }}
+              className="text-xs font-bold text-blue-700 dark:text-blue-300 underline hover:opacity-80 shrink-0"
+            >
+              Adjust Stock Now
+            </button>
+          )}
         </div>
 
         {/* Buttons */}
@@ -392,7 +381,7 @@ export function AddProductModal({
             disabled={submitting}
             className="rounded-lg bg-amber-600 hover:bg-amber-700 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer disabled:opacity-50 transition-colors"
           >
-            {submitting ? "Saving Product..." : "Save Product & Stock"}
+            {submitting ? "Saving Changes..." : "Save Product Details"}
           </button>
         </div>
       </form>

@@ -8,12 +8,11 @@ import { Modal } from "@/components/shared/Modal";
 import { ShopExpense } from "@/types/shop";
 import { PaymentMethod } from "@/types/common";
 import { Category } from "@/lib/supabase/types";
-import { toISODateString } from "@/lib/date";
-import { createShopExpense } from "@/lib/data/shop/expenses";
+import { updateShopExpense } from "@/lib/data/shop/expenses";
 import { getShopExpenseCategories } from "@/lib/data/shop/categories";
 import { toast } from "sonner";
 
-const shopExpenseSchema = z.object({
+const editExpenseSchema = z.object({
   title: z.string().min(2, "Expense title is required"),
   categoryId: z.string().min(1, "Please select a category"),
   amount: z.number().positive("Amount must be greater than 0"),
@@ -22,21 +21,23 @@ const shopExpenseSchema = z.object({
   notes: z.string().optional(),
 });
 
-type ShopExpenseFormValues = z.infer<typeof shopExpenseSchema>;
+type EditExpenseFormValues = z.infer<typeof editExpenseSchema>;
 
-export interface AddShopExpenseModalProps {
+export interface EditShopExpenseModalProps {
   isOpen: boolean;
   onClose: () => void;
   workspaceId: string;
+  expense: ShopExpense | null;
   onSuccess?: (expense: ShopExpense) => void;
 }
 
-export function AddShopExpenseModal({
+export function EditShopExpenseModal({
   isOpen,
   onClose,
   workspaceId,
+  expense,
   onSuccess,
-}: AddShopExpenseModalProps) {
+}: EditShopExpenseModalProps) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loadingCategories, setLoadingCategories] = useState(false);
 
@@ -46,38 +47,54 @@ export function AddShopExpenseModal({
     setValue,
     reset,
     formState: { errors, isSubmitting },
-  } = useForm<ShopExpenseFormValues>({
-    resolver: zodResolver(shopExpenseSchema),
+  } = useForm<EditExpenseFormValues>({
+    resolver: zodResolver(editExpenseSchema),
     defaultValues: {
       title: "",
       categoryId: "",
       amount: 0,
       paymentMethod: "UPI",
-      date: toISODateString(),
+      date: "",
       notes: "",
     },
   });
 
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && expense) {
       setLoadingCategories(true);
       getShopExpenseCategories(workspaceId)
         .then((cats) => {
           setCategories(cats);
-          if (cats.length > 0) {
+          const match = cats.find(
+            (c) => c.id === expense.categoryId || c.name.toLowerCase() === expense.category.toLowerCase()
+          );
+          if (match) {
+            setValue("categoryId", match.id);
+          } else if (cats.length > 0) {
             setValue("categoryId", cats[0].id);
           }
         })
         .finally(() => setLoadingCategories(false));
-    }
-  }, [isOpen, workspaceId, setValue]);
 
-  const onSubmit = async (data: ShopExpenseFormValues) => {
+      reset({
+        title: expense.title,
+        categoryId: expense.categoryId || "",
+        amount: expense.amount,
+        paymentMethod: (expense.paymentMethod || "UPI") as any,
+        date: expense.date,
+        notes: expense.notes || "",
+      });
+    }
+  }, [isOpen, expense, workspaceId, setValue, reset]);
+
+  if (!expense) return null;
+
+  const onSubmit = async (data: EditExpenseFormValues) => {
     const selectedCat = categories.find((c) => c.id === data.categoryId);
     const categoryName = selectedCat?.name || "Other";
 
     try {
-      const res = await createShopExpense(workspaceId, {
+      const res = await updateShopExpense(expense.id, workspaceId, {
         title: data.title,
         categoryId: data.categoryId,
         category: categoryName,
@@ -88,11 +105,11 @@ export function AddShopExpenseModal({
       });
 
       if (!res.success) {
-        toast.error(res.error || "Failed to save expense.");
+        toast.error(res.error || "Failed to update expense.");
         return;
       }
 
-      toast.success(`Shop expense of ₹${data.amount} for "${data.title}" saved!`);
+      toast.success(`Shop expense updated successfully!`);
 
       if (res.expense && onSuccess) {
         onSuccess(res.expense);
@@ -101,7 +118,7 @@ export function AddShopExpenseModal({
       reset();
       onClose();
     } catch (err: any) {
-      toast.error(err?.message || "Unexpected error saving expense.");
+      toast.error(err?.message || "Unexpected error updating expense.");
     }
   };
 
@@ -109,8 +126,8 @@ export function AddShopExpenseModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Add Shop Operating Expense"
-      description="Record premise rent, helper wages, commercial power, repair or packaging overheads."
+      title="Edit Shop Operating Expense"
+      description="Update expense item, category, amount, or notes."
       maxWidth="md"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -120,7 +137,7 @@ export function AddShopExpenseModal({
           </label>
           <input
             type="text"
-            placeholder="e.g. Commercial electricity bill, Carry bags, Refrigerator repair"
+            placeholder="e.g. Electricity bill"
             {...register("title")}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
           />
@@ -200,7 +217,7 @@ export function AddShopExpenseModal({
           </label>
           <input
             type="text"
-            placeholder="e.g. Paid to electricity board counter"
+            placeholder="e.g. Paid to electricity board"
             {...register("notes")}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
           />
@@ -219,7 +236,7 @@ export function AddShopExpenseModal({
             disabled={isSubmitting}
             className="rounded-lg bg-rose-600 hover:bg-rose-700 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer disabled:opacity-50"
           >
-            {isSubmitting ? "Saving..." : "Save Shop Expense"}
+            {isSubmitting ? "Updating..." : "Update Shop Expense"}
           </button>
         </div>
       </form>

@@ -11,7 +11,6 @@ import { AddDailySaleModal } from "@/components/forms/AddDailySaleModal";
 import { EditDailySaleModal } from "@/components/forms/EditDailySaleModal";
 import { SkeletonCard } from "@/components/shared/SkeletonCard";
 import { formatINR } from "@/lib/currency";
-import { getTodayDisplayDate } from "@/lib/date";
 import { DailySale } from "@/types/shop";
 import { getShopDashboardData, ShopDashboardData } from "@/lib/data/shop/dashboard";
 import { getAuthenticatedShopWorkspace } from "@/lib/data/shop/workspace";
@@ -24,12 +23,16 @@ import {
   Users,
   Plus,
   ArrowRight,
-  Sparkles,
   RefreshCw,
   AlertCircle,
   CheckCircle2,
   Edit2,
   Lock,
+  Receipt,
+  CreditCard,
+  Boxes,
+  Package,
+  AlertTriangle,
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -50,10 +53,16 @@ export default function ShopDashboardPage() {
     todayCashSales: 0,
     todayOnlineSales: 0,
     todayExpenses: 0,
+    thisMonthPurchases: 0,
     estimatedTodayProfit: null,
     pendingSupplierPayments: 0,
     isTodayRecorded: false,
     todaySale: null,
+    totalInventoryValue: 0,
+    totalProductsCount: 0,
+    lowStockCount: 0,
+    outOfStockCount: 0,
+    lowStockProducts: [],
     thisMonthSales: 0,
     prevMonthSales: 0,
     monthGrowthPct: 0,
@@ -113,7 +122,7 @@ export default function ShopDashboardPage() {
     <div className="space-y-6">
       <PageHeader
         title="Pan Shop Dashboard"
-        description="Daily counter sales, cash vs UPI collections, monthly trajectory, and operating performance."
+        description="Daily counter sales, cash vs UPI collections, wholesale purchases, expenses and dues."
         badge="🏪 Pan Shop Workspace"
       >
         <div className="flex items-center gap-2">
@@ -247,11 +256,10 @@ export default function ShopDashboardPage() {
 
           <StatCard
             title="Today's Expenses"
-            amount={0}
+            amount={dashboardData.todayExpenses}
             icon={TrendingDown}
             colorScheme="rose"
-            badge="Phase 6"
-            subtitle="Expenses connect in Phase 6"
+            subtitle="Operational overheads"
           />
 
           <StatCard
@@ -261,23 +269,23 @@ export default function ShopDashboardPage() {
             icon={LineChart}
             colorScheme="indigo"
             badge="Phase 8"
-            subtitle="Requires Inventory & Costs"
+            subtitle="Requires Inventory & COGS"
           />
 
           <StatCard
             title="Pending Suppliers"
-            amount={0}
+            amount={dashboardData.pendingSupplierPayments}
             icon={Users}
             colorScheme="violet"
-            badge="Phase 7"
-            subtitle="Suppliers connect in Phase 7"
+            badge={dashboardData.pendingSupplierPayments > 0 ? "Dues" : undefined}
+            subtitle="Outstanding invoices"
           />
         </div>
       )}
 
-      {/* Monthly Sales Performance Highlight Bar */}
+      {/* Monthly Performance & Inventory Highlight Bar */}
       {!loading && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm flex items-center justify-between">
             <div>
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
@@ -310,24 +318,39 @@ export default function ShopDashboardPage() {
               {formatINR(dashboardData.averageDailySales)}
             </p>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              Per active recorded business day
+              Per active business day
             </p>
           </div>
 
           <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
-              Best Sales Day (Month)
+              Purchases This Month
             </span>
             <p className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1">
-              {dashboardData.bestSalesDay
-                ? formatINR(dashboardData.bestSalesDay.amount)
-                : "No data"}
+              {formatINR(dashboardData.thisMonthPurchases)}
             </p>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              {dashboardData.bestSalesDay
-                ? dashboardData.bestSalesDay.formattedDate
-                : "Record daily sales to find best day"}
+              Stock procurement bills
             </p>
+          </div>
+
+          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm flex items-center justify-between">
+            <div>
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                Stock Valuation
+              </span>
+              <p className="text-xl font-black text-slate-900 dark:text-white mt-1">
+                {formatINR(dashboardData.totalInventoryValue)}
+              </p>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {dashboardData.totalProductsCount} active items
+              </p>
+            </div>
+            {(dashboardData.lowStockCount > 0 || dashboardData.outOfStockCount > 0) && (
+              <span className="text-xs font-bold px-2 py-1 rounded-md bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800">
+                {dashboardData.lowStockCount + dashboardData.outOfStockCount} Low/Empty
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -350,10 +373,10 @@ export default function ShopDashboardPage() {
           <CashVsOnlineDonutChart data={dashboardData.paymentBreakdown} />
         </ChartCard>
 
-        {/* Monthly Revenue vs Stock Purchases */}
+        {/* Monthly Revenue vs Stock Purchases vs Expenses */}
         <ChartCard
-          title="Monthly Counter Revenue"
-          subtitle="6-month counter performance (Purchases/Expenses connect in later phases)"
+          title="Monthly Revenue vs Stock Purchases vs Expenses"
+          subtitle="6-month operational comparison of sales revenue, wholesale stock, and operating costs"
         >
           <MonthlyRevenueBarChart data={dashboardData.monthlyRevenueTrend} />
         </ChartCard>
@@ -372,71 +395,101 @@ export default function ShopDashboardPage() {
                 Profit Calculation Available in Phase 8
               </p>
               <p className="text-xs text-slate-400 max-w-sm mt-1">
-                True profit cannot be calculated from sales alone. COGS from purchases and daily expenses will connect here in upcoming phases.
+                True profit cannot be calculated from sales alone. Cost of Goods Sold (COGS) and inventory valuation will connect here.
               </p>
             </div>
             <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 px-3 py-1 rounded-full border border-indigo-200 dark:border-indigo-800">
-              Pending: Phase 6 (Expenses) & Phase 7 (Inventory & Purchases)
+              Pending: Phase 7 (Inventory & COGS)
             </span>
           </div>
         </ChartCard>
       </div>
 
-      {/* Recent Shop Activity Feed & Quick Operations Link */}
+      {/* Mixed Shop Activity Feed & Quick Operations Links */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                Recent Daily Sales Activity
+                Recent Shop Operations Activity
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Latest shop closing logs and collection channels
+                Real-time activity across sales, stock purchases, supplier payments and expenses
               </p>
             </div>
             <Link
-              href="/shop/sales"
+              href="/shop/reports"
               className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline"
             >
-              Sales History <ArrowRight className="h-3.5 w-3.5" />
+              All Reports <ArrowRight className="h-3.5 w-3.5" />
             </Link>
           </div>
 
           {dashboardData.recentActivity.length === 0 ? (
             <div className="py-8 text-center text-xs text-slate-400">
-              No recent sales activity recorded yet.
+              No recent shop activity recorded yet.
             </div>
           ) : (
             <div className="divide-y divide-slate-100 dark:divide-slate-800/60 text-xs">
-              {dashboardData.recentActivity.map((act) => (
-                <div
-                  key={act.id}
-                  className="py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 px-2 rounded-lg transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                      ₹
-                    </div>
-                    <div>
-                      <span className="font-bold text-slate-900 dark:text-white block">
-                        {act.title}
-                      </span>
-                      <span className="text-[11px] text-slate-400">
-                        {act.time} • Primary: {act.method}
-                      </span>
-                    </div>
-                  </div>
+              {dashboardData.recentActivity.map((act) => {
+                let badgeBg = "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300";
+                let sign = "+";
+                let amountColor = "text-emerald-600 dark:text-emerald-400";
+                let icon = <ShoppingCart className="h-4 w-4" />;
 
-                  <div className="text-right">
-                    <span className="font-bold block text-emerald-600 dark:text-emerald-400">
-                      +{formatINR(act.amount)}
-                    </span>
-                    <span className="text-[10px] text-slate-400 capitalize">
-                      Daily Sales
-                    </span>
+                if (act.type === "purchase") {
+                  badgeBg = "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300";
+                  sign = "";
+                  amountColor = "text-amber-600 dark:text-amber-400";
+                  icon = <Receipt className="h-4 w-4" />;
+                } else if (act.type === "payment") {
+                  badgeBg = "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300";
+                  sign = "-";
+                  amountColor = "text-blue-600 dark:text-blue-400";
+                  icon = <CreditCard className="h-4 w-4" />;
+                } else if (act.type === "expense") {
+                  badgeBg = "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300";
+                  sign = "-";
+                  amountColor = "text-rose-600 dark:text-rose-400";
+                  icon = <TrendingDown className="h-4 w-4" />;
+                }
+
+                return (
+                  <div
+                    key={act.id}
+                    className="py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40 px-2 rounded-lg transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={cn("flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold", badgeBg)}>
+                        {icon}
+                      </div>
+                      <div>
+                        <span className="font-bold text-slate-900 dark:text-white block">
+                          {act.title}
+                        </span>
+                        <span className="text-[11px] text-slate-400">
+                          {act.time} • {act.method}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <span className={cn("font-bold block", amountColor)}>
+                        {sign}{formatINR(act.amount)}
+                      </span>
+                      <span className="text-[10px] text-slate-400 capitalize">
+                        {act.type === "sales"
+                          ? "Daily Sales"
+                          : act.type === "purchase"
+                          ? "Stock Bill"
+                          : act.type === "payment"
+                          ? "Vendor Payment"
+                          : "Shop Expense"}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -445,52 +498,161 @@ export default function ShopDashboardPage() {
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4 flex flex-col justify-between">
           <div className="space-y-3">
             <h3 className="text-base font-bold text-slate-900 dark:text-white">
-              Operations Preview
+              Quick Navigation
             </h3>
-            <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 uppercase block">
-                  Customer Khata (Udhar)
-                </span>
-                <span className="text-[10px] font-semibold text-amber-600 bg-amber-100 dark:bg-amber-900/60 px-1.5 py-0.5 rounded">
-                  Phase 9
-                </span>
-              </div>
-              <p className="text-xl font-bold text-amber-900 dark:text-amber-200">
-                Customer Tabs
-              </p>
-              <p className="text-[11px] text-amber-600 dark:text-amber-400">
-                Customer credit ledger will connect in Phase 9.
-              </p>
-            </div>
 
-            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-slate-500 uppercase block">
-                  Inventory & Stock
-                </span>
-                <span className="text-[10px] font-semibold text-slate-500 bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded">
-                  Phase 7
-                </span>
+            <Link
+              href="/shop/inventory"
+              className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between hover:border-amber-500/50 transition-colors group"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-600">
+                  <Package className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-blue-600">
+                    Inventory & Products
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    {dashboardData.totalProductsCount} items • {formatINR(dashboardData.totalInventoryValue)} value
+                  </p>
+                </div>
               </div>
-              <p className="text-sm font-bold text-slate-900 dark:text-white">
-                Item Stock & Reorders
-              </p>
-              <p className="text-[11px] text-slate-400">
-                Stock tracking and supplier orders connect in Phase 7.
-              </p>
-            </div>
+              <ArrowRight className="h-4 w-4 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all" />
+            </Link>
+
+            <Link
+              href="/shop/suppliers"
+              className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between hover:border-amber-500/50 transition-colors group"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950 text-amber-600">
+                  <Users className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-amber-600">
+                    Distributors & Suppliers
+                  </p>
+                  <p className="text-[11px] text-slate-400">Manage vendor accounts & balances</p>
+                </div>
+              </div>
+              <ArrowRight className="h-4 w-4 text-slate-400 group-hover:text-amber-600 group-hover:translate-x-0.5 transition-all" />
+            </Link>
+
+            <Link
+              href="/shop/purchases"
+              className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between hover:border-amber-500/50 transition-colors group"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950 text-emerald-600">
+                  <Receipt className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-emerald-600">
+                    Stock Invoices & Bills
+                  </p>
+                  <p className="text-[11px] text-slate-400">Record stock delivery invoices</p>
+                </div>
+              </div>
+              <ArrowRight className="h-4 w-4 text-slate-400 group-hover:text-emerald-600 group-hover:translate-x-0.5 transition-all" />
+            </Link>
+
+            <Link
+              href="/shop/expenses"
+              className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between hover:border-rose-500/50 transition-colors group"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-rose-50 dark:bg-rose-950 text-rose-600">
+                  <TrendingDown className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-rose-600">
+                    Shop Operating Expenses
+                  </p>
+                  <p className="text-[11px] text-slate-400">Rent, power bills, helper wages</p>
+                </div>
+              </div>
+              <ArrowRight className="h-4 w-4 text-slate-400 group-hover:text-rose-600 group-hover:translate-x-0.5 transition-all" />
+            </Link>
           </div>
 
-          <div className="pt-2 space-y-2">
+          <div className="pt-2">
             <Link
               href="/shop/sales"
               className="w-full flex items-center justify-center gap-2 rounded-xl bg-amber-600 text-white p-2.5 text-xs font-semibold hover:bg-amber-700 transition-colors shadow-xs"
             >
-              Open Daily Sales Log <ArrowRight className="h-3.5 w-3.5" />
+              Open Daily Counter Sales <ArrowRight className="h-3.5 w-3.5" />
             </Link>
           </div>
         </div>
+      </div>
+
+      {/* Low Stock Alerts & Distributor Re-Order Widget */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950 text-amber-600">
+              <AlertTriangle className="h-4 w-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                Store Low Stock & Out of Stock Alerts
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Pan shop items reaching safety minimums or completely empty shelves
+              </p>
+            </div>
+          </div>
+
+          <Link
+            href="/shop/inventory"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline"
+          >
+            Open Inventory <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+
+        {dashboardData.lowStockProducts.length === 0 ? (
+          <div className="p-4 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+            <span>All active products have sufficient stock. Minimum safety thresholds are satisfied.</span>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 pt-1">
+            {dashboardData.lowStockProducts.map((p) => (
+              <div
+                key={p.id}
+                className={cn(
+                  "p-3 rounded-xl border flex flex-col justify-between space-y-2 text-xs",
+                  p.currentStock === 0
+                    ? "bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800"
+                    : "bg-amber-50/50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800"
+                )}
+              >
+                <div>
+                  <span className="font-bold text-slate-900 dark:text-white block truncate">
+                    {p.name}
+                  </span>
+                  <span className="text-[11px] text-slate-400 block">{p.category}</span>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
+                  <span
+                    className={cn(
+                      "font-black text-xs",
+                      p.currentStock === 0 ? "text-rose-600" : "text-amber-600"
+                    )}
+                  >
+                    {p.currentStock} {p.unit} left
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    Limit: {p.lowStockThreshold}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Add Daily Sale Modal */}

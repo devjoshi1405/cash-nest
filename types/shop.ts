@@ -1,4 +1,5 @@
 import { PaymentMethod } from "./common";
+export * from "./inventory";
 
 export type ShopExpenseCategory =
   | "Rent"
@@ -9,7 +10,11 @@ export type ShopExpenseCategory =
   | "Packaging"
   | "Equipment"
   | "Internet"
-  | "Other";
+  | "Cleaning"
+  | "License / Fees"
+  | "Miscellaneous"
+  | "Other"
+  | string;
 
 export type PurchasePaymentStatus = "Paid" | "Partially Paid" | "Pending";
 
@@ -31,6 +36,8 @@ export interface DailySale {
 
 export interface PurchaseRecord {
   id: string;
+  workspaceId?: string;
+  userId?: string;
   supplierId?: string;
   supplierName: string;
   purchaseDate: string;
@@ -42,16 +49,25 @@ export interface PurchaseRecord {
   paymentMethod: PaymentMethod;
   notes?: string;
   itemsCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  payments?: SupplierPayment[];
 }
 
 export interface ShopExpense {
   id: string;
+  workspaceId?: string;
+  userId?: string;
   date: string;
   title: string;
   category: ShopExpenseCategory;
+  categoryId?: string | null;
+  categoryIcon?: string;
   amount: number;
   paymentMethod: PaymentMethod;
   notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface InventoryProduct {
@@ -80,27 +96,37 @@ export interface StockAdjustment {
 
 export interface SupplierPayment {
   id: string;
+  workspaceId?: string;
+  userId?: string;
   supplierId: string;
+  purchaseId?: string | null;
   date: string;
   amount: number;
   paymentMethod: PaymentMethod;
   billNumber?: string;
   notes?: string;
+  createdAt?: string;
 }
 
 export interface Supplier {
   id: string;
+  workspaceId?: string;
+  userId?: string;
   name: string;
   phone: string;
   email?: string;
   address?: string;
   category: string;
+  notes?: string;
+  isActive?: boolean;
   totalPurchases: number;
   totalPaid: number;
   pendingAmount: number;
   lastPurchaseDate: string;
   purchasesCount: number;
   paymentHistory?: SupplierPayment[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface CustomerCreditPayment {

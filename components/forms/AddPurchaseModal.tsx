@@ -1,18 +1,20 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Modal } from "@/components/shared/Modal";
-import { PurchaseRecord, PurchasePaymentStatus } from "@/types/shop";
+import { PurchaseRecord, PurchasePaymentStatus, Supplier } from "@/types/shop";
 import { PaymentMethod } from "@/types/common";
 import { toISODateString } from "@/lib/date";
+import { createShopPurchase } from "@/lib/data/shop/purchases";
+import { getShopSuppliers } from "@/lib/data/shop/suppliers";
 import { toast } from "sonner";
 
 const purchaseSchema = z.object({
-  supplierName: z.string().min(2, "Supplier name is required"),
-  billNumber: z.string().min(1, "Bill/Invoice number is required"),
+  supplierId: z.string().min(1, "Please select a supplier"),
+  billNumber: z.string().optional(),
   purchaseDate: z.string().min(1, "Purchase date is required"),
   totalAmount: z.number().positive("Total bill amount must be greater than 0"),
   paidAmount: z.number().min(0, "Paid amount cannot be negative"),
@@ -25,20 +27,34 @@ type PurchaseFormValues = z.infer<typeof purchaseSchema>;
 export interface AddPurchaseModalProps {
   isOpen: boolean;
   onClose: () => void;
+  workspaceId: string;
+  initialSupplierId?: string;
+  suppliersList?: Supplier[];
   onSuccess?: (purchase: PurchaseRecord) => void;
 }
 
-export function AddPurchaseModal({ isOpen, onClose, onSuccess }: AddPurchaseModalProps) {
+export function AddPurchaseModal({
+  isOpen,
+  onClose,
+  workspaceId,
+  initialSupplierId,
+  suppliersList: propSuppliers,
+  onSuccess,
+}: AddPurchaseModalProps) {
+  const [suppliers, setSuppliers] = useState<Supplier[]>(propSuppliers || []);
+  const [loadingSuppliers, setLoadingSuppliers] = useState(false);
+
   const {
     register,
     handleSubmit,
     watch,
     reset,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<PurchaseFormValues>({
     resolver: zodResolver(purchaseSchema),
     defaultValues: {
-      supplierName: "",
+      supplierId: initialSupplierId || "",
       billNumber: "",
       purchaseDate: toISODateString(),
       totalAmount: 0,
@@ -59,38 +75,68 @@ export function AddPurchaseModal({ isOpen, onClose, onSuccess }: AddPurchaseModa
     status = "Partially Paid";
   }
 
-  const onSubmit = (data: PurchaseFormValues) => {
+  useEffect(() => {
+    if (isOpen) {
+      if (initialSupplierId) {
+        setValue("supplierId", initialSupplierId);
+      }
+      if (!propSuppliers || propSuppliers.length === 0) {
+        setLoadingSuppliers(true);
+        getShopSuppliers(workspaceId, { includeArchived: false })
+          .then((list) => {
+            setSuppliers(list);
+            if (!initialSupplierId && list.length > 0) {
+              setValue("supplierId", list[0].id);
+            }
+          })
+          .finally(() => setLoadingSuppliers(false));
+      } else {
+        setSuppliers(propSuppliers);
+        if (!initialSupplierId && propSuppliers.length > 0) {
+          setValue("supplierId", propSuppliers[0].id);
+        }
+      }
+    }
+  }, [isOpen, workspaceId, initialSupplierId, propSuppliers, setValue]);
+
+  const onSubmit = async (data: PurchaseFormValues) => {
     const totalAmt = Number(data.totalAmount);
     const paidAmt = Number(data.paidAmount);
-    const remAmt = Math.max(0, totalAmt - paidAmt);
 
-    let paymentStatus: PurchasePaymentStatus = "Pending";
-    if (paidAmt >= totalAmt) {
-      paymentStatus = "Paid";
-    } else if (paidAmt > 0) {
-      paymentStatus = "Partially Paid";
+    if (paidAmt > totalAmt) {
+      toast.error("Initial payment cannot exceed the purchase total.");
+      return;
     }
 
-    const newPurchase: PurchaseRecord = {
-      id: `pur-${Date.now()}`,
-      supplierName: data.supplierName,
-      billNumber: data.billNumber,
-      purchaseDate: data.purchaseDate,
-      totalAmount: totalAmt,
-      paidAmount: paidAmt,
-      remainingAmount: remAmt,
-      paymentStatus,
-      paymentMethod: data.paymentMethod as PaymentMethod,
-      notes: data.notes,
-    };
+    try {
+      const res = await createShopPurchase(workspaceId, {
+        supplierId: data.supplierId,
+        billNumber: data.billNumber?.trim(),
+        purchaseDate: data.purchaseDate,
+        totalAmount: totalAmt,
+        initialPaidAmount: paidAmt,
+        paymentMethod: data.paymentMethod as PaymentMethod,
+        notes: data.notes?.trim(),
+      });
 
-    if (onSuccess) {
-      onSuccess(newPurchase);
+      if (!res.success) {
+        toast.error(res.error || "Failed to record purchase.");
+        return;
+      }
+
+      toast.success(
+        `Purchase bill ${data.billNumber ? `#${data.billNumber}` : ""} recorded successfully!`
+      );
+
+      if (res.purchase && onSuccess) {
+        onSuccess(res.purchase);
+      }
+
+      reset();
+      onClose();
+    } catch (err: any) {
+      toast.error(err?.message || "Unexpected error saving purchase.");
     }
-
-    toast.success(`Purchase bill ${data.billNumber} from "${data.supplierName}" recorded!`);
-    reset();
-    onClose();
   };
 
   return (
@@ -98,29 +144,40 @@ export function AddPurchaseModal({ isOpen, onClose, onSuccess }: AddPurchaseModa
       isOpen={isOpen}
       onClose={onClose}
       title="Record Stock Purchase"
-      description="Enter supplier delivery invoice and payment details."
+      description="Enter wholesale distributor delivery invoice and payment details."
       maxWidth="md"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div>
           <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-            Supplier / Agency Name *
+            Supplier / Wholesale Vendor *
           </label>
-          <input
-            type="text"
-            placeholder="e.g. Raj Cold Drinks & Beverages, Balaji Wafers"
-            {...register("supplierName")}
+          <select
+            {...register("supplierId")}
+            disabled={loadingSuppliers}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
-          />
-          {errors.supplierName && (
-            <p className="mt-1 text-xs text-rose-500">{errors.supplierName.message}</p>
+          >
+            {suppliers.length === 0 ? (
+              <option value="">
+                {loadingSuppliers ? "Loading suppliers..." : "No suppliers found. Please add a supplier first."}
+              </option>
+            ) : (
+              suppliers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} {s.phone ? `(${s.phone})` : ""}
+                </option>
+              ))
+            )}
+          </select>
+          {errors.supplierId && (
+            <p className="mt-1 text-xs text-rose-500">{errors.supplierId.message}</p>
           )}
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Bill / Invoice Number *
+              Bill / Invoice Number (Optional)
             </label>
             <input
               type="text"
@@ -128,9 +185,6 @@ export function AddPurchaseModal({ isOpen, onClose, onSuccess }: AddPurchaseModa
               {...register("billNumber")}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white font-mono focus:outline-none"
             />
-            {errors.billNumber && (
-              <p className="mt-1 text-xs text-rose-500">{errors.billNumber.message}</p>
-            )}
           </div>
 
           <div>
@@ -152,7 +206,8 @@ export function AddPurchaseModal({ isOpen, onClose, onSuccess }: AddPurchaseModa
             </label>
             <input
               type="number"
-              placeholder="12000"
+              placeholder="10000"
+              step="any"
               {...register("totalAmount", { valueAsNumber: true })}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white font-bold focus:outline-none"
             />
@@ -163,29 +218,33 @@ export function AddPurchaseModal({ isOpen, onClose, onSuccess }: AddPurchaseModa
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Amount Paid Now (₹)
+              Initial Paid Amount (₹)
             </label>
             <input
               type="number"
-              placeholder="8000"
+              placeholder="0"
+              step="any"
               {...register("paidAmount", { valueAsNumber: true })}
               className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white font-bold focus:outline-none"
             />
+            {errors.paidAmount && (
+              <p className="mt-1 text-xs text-rose-500">{errors.paidAmount.message}</p>
+            )}
           </div>
         </div>
 
-        {/* Calculated Status & Remaining */}
-        <div className="flex items-center justify-between rounded-lg bg-slate-100 dark:bg-slate-800 p-3 text-xs">
+        {/* Live Calculation Box */}
+        <div className="flex items-center justify-between rounded-xl bg-slate-100 dark:bg-slate-800/80 p-3.5 text-xs">
           <div>
-            <span className="text-slate-500">Remaining Balance: </span>
-            <span className="font-bold text-slate-900 dark:text-white">
+            <span className="text-slate-500 dark:text-slate-400">Remaining Balance: </span>
+            <span className="font-bold text-slate-900 dark:text-white ml-1">
               ₹{remaining.toLocaleString("en-IN")}
             </span>
           </div>
-          <div>
-            <span className="text-slate-500">Status: </span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-500 dark:text-slate-400">Status: </span>
             <span
-              className={`font-semibold px-2 py-0.5 rounded-full ${
+              className={`font-semibold px-2.5 py-0.5 rounded-full ${
                 status === "Paid"
                   ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
                   : status === "Partially Paid"
@@ -206,20 +265,22 @@ export function AddPurchaseModal({ isOpen, onClose, onSuccess }: AddPurchaseModa
             {...register("paymentMethod")}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
           >
-            <option value="UPI">UPI</option>
+            <option value="UPI">UPI (QR / PhonePe / GPay)</option>
             <option value="Cash">Cash</option>
-            <option value="Bank">Bank Transfer</option>
-            <option value="Other">Credit / Pay Later</option>
+            <option value="Bank">Bank Transfer / NEFT</option>
+            <option value="Credit Card">Credit Card</option>
+            <option value="Debit Card">Debit Card</option>
+            <option value="Other">Other</option>
           </select>
         </div>
 
         <div>
           <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-            Items / Remarks (Optional)
+            Notes / Goods Description (Optional)
           </label>
           <input
             type="text"
-            placeholder="e.g. 20 crates Thums Up, Sprite bottles"
+            placeholder="e.g. 15 crates Thums Up, 5 boxes Balaji Wafers"
             {...register("notes")}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
           />
@@ -235,10 +296,10 @@ export function AddPurchaseModal({ isOpen, onClose, onSuccess }: AddPurchaseModa
           </button>
           <button
             type="submit"
-            disabled={isSubmitting}
-            className="rounded-lg bg-slate-900 dark:bg-white dark:text-slate-900 hover:bg-slate-800 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer"
+            disabled={isSubmitting || suppliers.length === 0}
+            className="rounded-lg bg-slate-900 dark:bg-white dark:text-slate-900 hover:bg-slate-800 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer disabled:opacity-50"
           >
-            Save Purchase
+            {isSubmitting ? "Saving Purchase..." : "Save Purchase"}
           </button>
         </div>
       </form>

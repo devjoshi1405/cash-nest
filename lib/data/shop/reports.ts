@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/client";
 import { DailySalesTrendPoint } from "@/components/charts/DailySalesLineChart";
 import { SplitItem } from "@/components/charts/CashVsOnlineDonutChart";
 import { ShopMonthlyBarData } from "@/components/charts/MonthlyRevenueBarChart";
+import { ExpenseCategoryDistribution } from "@/types/home";
 import {
   toISODateString,
   formatDate,
@@ -15,7 +16,19 @@ import {
   calculateOnlineSales,
 } from "./sales";
 
-export interface ShopSalesReportData {
+export interface SupplierOutstandingItem {
+  id: string;
+  name: string;
+  phone: string;
+  totalPurchases: number;
+  totalPaid: number;
+  pendingAmount: number;
+}
+
+import { CategoryInventoryValue, StockMovementSummary } from "@/types/inventory";
+
+export interface ShopReportsData {
+  // Sales
   totalSales: number;
   totalCash: number;
   totalUpi: number;
@@ -32,18 +45,59 @@ export interface ShopSalesReportData {
   } | null;
   salesTrend: DailySalesTrendPoint[];
   paymentSplit: SplitItem[];
+
+  // Purchases
+  totalPurchases: number;
+  totalPurchasesPaid: number;
+  totalPurchasesPending: number;
+  purchaseBillsCount: number;
+
+  // Expenses
+  totalExpenses: number;
+  expensesCount: number;
+  expenseCategories: ExpenseCategoryDistribution[];
+
+  // Inventory & Stock (Phase 7)
+  totalInventoryValue: number;
+  totalProductsCount: number;
+  lowStockProductsCount: number;
+  outOfStockProductsCount: number;
+  inventoryCategories: CategoryInventoryValue[];
+  stockMovementSummary: StockMovementSummary;
+
+  // Supplier Balances
+  supplierOutstandings: SupplierOutstandingItem[];
+  totalSupplierDues: number;
+
+  // Trends
   monthlyRevenueTrend: ShopMonthlyBarData[];
+
   hasData: boolean;
 }
 
+const CATEGORY_COLORS: Record<string, string> = {
+  Rent: "#8B5CF6",
+  Electricity: "#F59E0B",
+  Transport: "#3B82F6",
+  Maintenance: "#10B981",
+  Employee: "#EC4899",
+  Packaging: "#06B6D4",
+  Equipment: "#6366F1",
+  Internet: "#14B8A6",
+  Cleaning: "#84CC16",
+  "License / Fees": "#EAB308",
+  Miscellaneous: "#64748B",
+  Other: "#94A3B8",
+};
+
 /**
- * Fetch and aggregate Pan Shop sales analytics for the specified date filter.
+ * Fetch and aggregate complete Pan Shop analytics for the specified date filter.
  */
-export async function getShopSalesReportData(
+export async function getShopReportsData(
   workspaceId: string,
   dateRangePreset: string = "this-month",
   customRange?: { startDate?: string; endDate?: string }
-): Promise<ShopSalesReportData> {
+): Promise<ShopReportsData> {
   const supabase = createClient();
   const now = new Date();
   const todayStr = toISODateString(now);
@@ -119,55 +173,109 @@ export async function getShopSalesReportData(
     }
   }
 
+  const recent6 = getRecentMonths(6, now);
+  const trendWindowStart = recent6[0]?.startDate || startDate || "";
+
   try {
-    let query = supabase
+    // 1. Parallel queries for Sales, Purchases, Expenses, Suppliers, Products, Movements, and 6-Month Windows
+    let salesQuery = supabase
       .from("daily_sales")
       .select("*")
       .eq("workspace_id", workspaceId);
 
+    let purchasesQuery = supabase
+      .from("purchases")
+      .select("*, supplier_payments(amount)")
+      .eq("workspace_id", workspaceId);
+
+    let expensesQuery = supabase
+      .from("transactions")
+      .select("*, categories(name)")
+      .eq("workspace_id", workspaceId)
+      .eq("type", "expense");
+
+    let suppliersQuery = supabase
+      .from("suppliers")
+      .select("id, name, phone, purchases(total_amount), supplier_payments(amount)")
+      .eq("workspace_id", workspaceId)
+      .neq("is_active", false);
+
+    let productsQuery = supabase
+      .from("products")
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .eq("is_active", true);
+
+    let movementsQuery = supabase
+      .from("inventory_movements")
+      .select("movement_type, quantity, unit_cost, movement_date")
+      .eq("workspace_id", workspaceId);
+
+    let trendSalesQuery = supabase
+      .from("daily_sales")
+      .select("sale_date, cash_amount, upi_amount, card_amount, other_amount")
+      .eq("workspace_id", workspaceId)
+      .gte("sale_date", trendWindowStart);
+
+    let trendPurchasesQuery = supabase
+      .from("purchases")
+      .select("purchase_date, total_amount")
+      .eq("workspace_id", workspaceId)
+      .gte("purchase_date", trendWindowStart);
+
+    let trendExpensesQuery = supabase
+      .from("transactions")
+      .select("transaction_date, amount")
+      .eq("workspace_id", workspaceId)
+      .eq("type", "expense")
+      .gte("transaction_date", trendWindowStart);
+
     if (startDate) {
-      query = query.gte("sale_date", startDate);
+      salesQuery = salesQuery.gte("sale_date", startDate);
+      purchasesQuery = purchasesQuery.gte("purchase_date", startDate);
+      expensesQuery = expensesQuery.gte("transaction_date", startDate);
+      movementsQuery = movementsQuery.gte("movement_date", startDate);
     }
     if (endDate) {
-      query = query.lte("sale_date", endDate);
+      salesQuery = salesQuery.lte("sale_date", endDate);
+      purchasesQuery = purchasesQuery.lte("purchase_date", endDate);
+      expensesQuery = expensesQuery.lte("transaction_date", endDate);
+      movementsQuery = movementsQuery.lte("movement_date", endDate);
     }
 
-    query = query.order("sale_date", { ascending: true });
+    salesQuery = salesQuery.order("sale_date", { ascending: true });
+    purchasesQuery = purchasesQuery.order("purchase_date", { ascending: true });
+    expensesQuery = expensesQuery.order("transaction_date", { ascending: true });
 
-    const { data, error } = await query;
+    const [
+      salesRes,
+      purchasesRes,
+      expensesRes,
+      suppliersRes,
+      productsRes,
+      movementsRes,
+      trendSalesRes,
+      trendPurchasesRes,
+      trendExpensesRes,
+    ] = await Promise.all([
+      salesQuery,
+      purchasesQuery,
+      expensesQuery,
+      suppliersQuery,
+      productsQuery,
+      movementsQuery,
+      trendSalesQuery,
+      trendPurchasesQuery,
+      trendExpensesQuery,
+    ]);
 
-    if (error || !data || data.length === 0) {
-      return {
-        totalSales: 0,
-        totalCash: 0,
-        totalUpi: 0,
-        totalCard: 0,
-        totalOther: 0,
-        totalOnline: 0,
-        upiDigitalPercentage: 0,
-        averageDailySales: 0,
-        recordedDays: 0,
-        bestSalesDay: null,
-        salesTrend: [],
-        paymentSplit: [
-          { name: "Cash", value: 0, percentage: 0, color: "#10B981" },
-          { name: "UPI QR", value: 0, percentage: 0, color: "#3B82F6" },
-          { name: "Card POS", value: 0, percentage: 0, color: "#8B5CF6" },
-          { name: "Other", value: 0, percentage: 0, color: "#64748B" },
-        ],
-        monthlyRevenueTrend: [],
-        hasData: false,
-      };
-    }
-
-    const salesList = data.map(mapDbDailySaleToUi);
-
+    // 2. Aggregate Sales
+    const salesList = (salesRes.data || []).map(mapDbDailySaleToUi);
     let totalCash = 0;
     let totalUpi = 0;
     let totalCard = 0;
     let totalOther = 0;
     let bestSalesDay: { date: string; amount: number; formattedDate: string } | null = null;
-
     const salesTrend: DailySalesTrendPoint[] = [];
 
     for (const sale of salesList) {
@@ -185,7 +293,7 @@ export async function getShopSalesReportData(
       }
 
       salesTrend.push({
-        day: formatDate(sale.date).split(" ").slice(0, 2).join(" "), // e.g. "14 Sep"
+        day: formatDate(sale.date).split(" ").slice(0, 2).join(" "),
         sales: sale.totalSales,
         cash: sale.cashSales,
         upi: calculateOnlineSales(sale.upiSales, sale.cardSales, sale.otherSales),
@@ -199,7 +307,6 @@ export async function getShopSalesReportData(
     const upiDigitalPercentage =
       totalSales > 0 ? Math.round((totalOnline / totalSales) * 1000) / 10 : 0;
 
-    // Payment split items
     const paymentSplit: SplitItem[] = [
       {
         name: "Cash",
@@ -227,22 +334,207 @@ export async function getShopSalesReportData(
       },
     ];
 
-    // Monthly revenue trend (recent 6 months)
-    const recent6 = getRecentMonths(6, now);
+    // 3. Aggregate Purchases
+    const rawPurchases = purchasesRes.data || [];
+    let totalPurchases = 0;
+    let totalPurchasesPaid = 0;
+
+    for (const p of rawPurchases) {
+      const amt = Number(p.total_amount || 0);
+      totalPurchases += amt;
+      const paidForBill = (p.supplier_payments || []).reduce(
+        (sum: number, sp: any) => sum + Number(sp.amount || 0),
+        0
+      );
+      totalPurchasesPaid += paidForBill;
+    }
+
+    const totalPurchasesPending = Math.max(0, totalPurchases - totalPurchasesPaid);
+    const purchaseBillsCount = rawPurchases.length;
+
+    // 4. Aggregate Expenses
+    const rawExpenses = expensesRes.data || [];
+    let totalExpenses = 0;
+    const categoryMap: Record<string, number> = {};
+
+    for (const exp of rawExpenses) {
+      const amt = Number(exp.amount || 0);
+      totalExpenses += amt;
+      const catName = (exp.categories as any)?.name || "Other";
+      categoryMap[catName] = (categoryMap[catName] || 0) + amt;
+    }
+
+    const expenseCategories: ExpenseCategoryDistribution[] = Object.entries(categoryMap)
+      .map(([name, amount]) => ({
+        category: name,
+        amount: Math.round(amount),
+        percentage: totalExpenses > 0 ? Math.round((amount / totalExpenses) * 100) : 0,
+        color: CATEGORY_COLORS[name] || "#64748B",
+      }))
+      .sort((a, b) => b.amount - a.amount);
+
+    // 5. Aggregate Inventory & Stock (Phase 7)
+    const rawProducts = productsRes.data || [];
+    let totalInventoryValue = 0;
+    let lowStockProductsCount = 0;
+    let outOfStockProductsCount = 0;
+    const catMap: Record<string, { count: number; units: number; val: number }> = {};
+
+    for (const prod of rawProducts) {
+      const stock = Number(prod.current_stock || 0);
+      const buyPrice = Number(prod.purchase_price || 0);
+      const threshold = prod.low_stock_threshold !== null ? Number(prod.low_stock_threshold) : 5;
+      const val = stock * buyPrice;
+
+      totalInventoryValue += val;
+
+      if (stock <= 0) {
+        outOfStockProductsCount += 1;
+      } else if (stock <= threshold) {
+        lowStockProductsCount += 1;
+      }
+
+      const cName = prod.category?.trim() || "Other";
+      if (!catMap[cName]) {
+        catMap[cName] = { count: 0, units: 0, val: 0 };
+      }
+      catMap[cName].count += 1;
+      catMap[cName].units += stock;
+      catMap[cName].val += val;
+    }
+
+    const catColors = [
+      "#F59E0B",
+      "#10B981",
+      "#3B82F6",
+      "#8B5CF6",
+      "#EC4899",
+      "#06B6D4",
+      "#EAB308",
+      "#6366F1",
+      "#14B8A6",
+      "#64748B",
+    ];
+
+    const inventoryCategories: CategoryInventoryValue[] = Object.entries(catMap)
+      .map(([category, stats], idx) => ({
+        category,
+        productCount: stats.count,
+        totalStockUnits: Math.round(stats.units * 1000) / 1000,
+        inventoryValue: Math.round(stats.val * 100) / 100,
+        percentage:
+          totalInventoryValue > 0
+            ? Math.round((stats.val / totalInventoryValue) * 1000) / 10
+            : 0,
+        color: catColors[idx % catColors.length],
+      }))
+      .sort((a, b) => b.inventoryValue - a.inventoryValue);
+
+    // 6. Aggregate Stock Movement Summary for period
+    const rawMovements = movementsRes.data || [];
+    let addedCount = 0;
+    let addedVal = 0;
+    let removedCount = 0;
+    let removedVal = 0;
+
+    for (const m of rawMovements) {
+      const qty = Number(m.quantity || 0);
+      const cost = Number(m.unit_cost || 0);
+      const lineCost = qty * cost;
+      const isStockIn = ["opening_stock", "purchase", "adjustment_in", "return_in"].includes(m.movement_type);
+
+      if (isStockIn) {
+        addedCount += 1;
+        addedVal += lineCost;
+      } else {
+        removedCount += 1;
+        removedVal += lineCost;
+      }
+    }
+
+    const stockMovementSummary: StockMovementSummary = {
+      stockAddedCount: addedCount,
+      stockAddedValue: Math.round(addedVal * 100) / 100,
+      stockRemovedCount: removedCount,
+      stockRemovedValue: Math.round(removedVal * 100) / 100,
+      netMovementValue: Math.round((addedVal - removedVal) * 100) / 100,
+      movementsCount: rawMovements.length,
+    };
+
+    // 7. Aggregate Supplier Outstanding Dues
+    const rawSuppliers = suppliersRes.data || [];
+    let totalSupplierDues = 0;
+    const supplierOutstandings: SupplierOutstandingItem[] = [];
+
+    for (const sup of rawSuppliers) {
+      const sPurchases = (sup.purchases || []).reduce(
+        (sum: number, p: any) => sum + Number(p.total_amount || 0),
+        0
+      );
+      const sPaid = (sup.supplier_payments || []).reduce(
+        (sum: number, sp: any) => sum + Number(sp.amount || 0),
+        0
+      );
+      const pending = Math.max(0, sPurchases - sPaid);
+      totalSupplierDues += pending;
+
+      if (pending > 0 || sPurchases > 0) {
+        supplierOutstandings.push({
+          id: sup.id,
+          name: sup.name,
+          phone: sup.phone || "",
+          totalPurchases: sPurchases,
+          totalPaid: sPaid,
+          pendingAmount: pending,
+        });
+      }
+    }
+
+    // Sort by largest pending dues
+    supplierOutstandings.sort((a, b) => b.pendingAmount - a.pendingAmount);
+
+    // 8. Monthly Revenue vs Purchases vs Expenses Trend (6 Months Bar Chart)
+    const tSales = trendSalesRes.data || [];
+    const tPurchases = trendPurchasesRes.data || [];
+    const tExpenses = trendExpensesRes.data || [];
+
     const monthlyRevenueTrend: ShopMonthlyBarData[] = recent6.map((m) => {
       let revenue = 0;
-      for (const sale of salesList) {
-        if (sale.date >= m.startDate && sale.date <= m.endDate) {
-          revenue += sale.totalSales;
+      let purchases = 0;
+      let expenses = 0;
+
+      for (const s of tSales) {
+        if (s.sale_date >= m.startDate && s.sale_date <= m.endDate) {
+          revenue +=
+            Number(s.cash_amount || 0) +
+            Number(s.upi_amount || 0) +
+            Number(s.card_amount || 0) +
+            Number(s.other_amount || 0);
         }
       }
+
+      for (const p of tPurchases) {
+        if (p.purchase_date >= m.startDate && p.purchase_date <= m.endDate) {
+          purchases += Number(p.total_amount || 0);
+        }
+      }
+
+      for (const exp of tExpenses) {
+        if (exp.transaction_date >= m.startDate && exp.transaction_date <= m.endDate) {
+          expenses += Number(exp.amount || 0);
+        }
+      }
+
       return {
         month: m.label,
         revenue: Math.round(revenue),
-        purchases: 0,
-        expenses: 0,
+        purchases: Math.round(purchases),
+        expenses: Math.round(expenses),
       };
     });
+
+    const hasData =
+      totalSales > 0 || totalPurchases > 0 || totalExpenses > 0 || supplierOutstandings.length > 0 || rawProducts.length > 0;
 
     return {
       totalSales,
@@ -257,11 +549,26 @@ export async function getShopSalesReportData(
       bestSalesDay,
       salesTrend,
       paymentSplit,
+      totalPurchases,
+      totalPurchasesPaid,
+      totalPurchasesPending,
+      purchaseBillsCount,
+      totalExpenses,
+      expensesCount: rawExpenses.length,
+      expenseCategories,
+      totalInventoryValue: Math.round(totalInventoryValue * 100) / 100,
+      totalProductsCount: rawProducts.length,
+      lowStockProductsCount,
+      outOfStockProductsCount,
+      inventoryCategories,
+      stockMovementSummary,
+      supplierOutstandings,
+      totalSupplierDues,
       monthlyRevenueTrend,
-      hasData: true,
+      hasData,
     };
   } catch (err) {
-    console.error("Error fetching shop sales report data:", err);
+    console.error("Error fetching shop reports data:", err);
     return {
       totalSales: 0,
       totalCash: 0,
@@ -275,6 +582,28 @@ export async function getShopSalesReportData(
       bestSalesDay: null,
       salesTrend: [],
       paymentSplit: [],
+      totalPurchases: 0,
+      totalPurchasesPaid: 0,
+      totalPurchasesPending: 0,
+      purchaseBillsCount: 0,
+      totalExpenses: 0,
+      expensesCount: 0,
+      expenseCategories: [],
+      totalInventoryValue: 0,
+      totalProductsCount: 0,
+      lowStockProductsCount: 0,
+      outOfStockProductsCount: 0,
+      inventoryCategories: [],
+      stockMovementSummary: {
+        stockAddedCount: 0,
+        stockAddedValue: 0,
+        stockRemovedCount: 0,
+        stockRemovedValue: 0,
+        netMovementValue: 0,
+        movementsCount: 0,
+      },
+      supplierOutstandings: [],
+      totalSupplierDues: 0,
       monthlyRevenueTrend: [],
       hasData: false,
     };

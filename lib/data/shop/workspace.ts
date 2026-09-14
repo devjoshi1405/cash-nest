@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/client";
 import { Workspace } from "@/lib/supabase/types";
 import { ensureDefaultWorkspaces } from "@/lib/data/workspaces";
+import { ensureDefaultShopExpenseCategories } from "./categories";
 
 export interface AuthenticatedShopWorkspace {
   userId: string;
@@ -56,6 +57,9 @@ export async function getAuthenticatedShopWorkspace(): Promise<AuthenticatedShop
     if (!workspace) {
       return null;
     }
+
+    // Ensure default shop categories exist
+    await ensureDefaultShopExpenseCategories(workspace.id, user.id);
 
     return {
       userId: user.id,

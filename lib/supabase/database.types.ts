@@ -379,6 +379,7 @@ export interface Database {
           email: string | null;
           address: string | null;
           notes: string | null;
+          is_active: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -391,6 +392,7 @@ export interface Database {
           email?: string | null;
           address?: string | null;
           notes?: string | null;
+          is_active?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -403,6 +405,7 @@ export interface Database {
           email?: string | null;
           address?: string | null;
           notes?: string | null;
+          is_active?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -711,6 +714,61 @@ export interface Database {
           }
         ];
       };
+      purchase_items: {
+        Row: {
+          id: string;
+          user_id: string;
+          workspace_id: string;
+          purchase_id: string;
+          product_id: string;
+          quantity: number;
+          unit_cost: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          workspace_id: string;
+          purchase_id: string;
+          product_id: string;
+          quantity: number;
+          unit_cost: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          workspace_id?: string;
+          purchase_id?: string;
+          product_id?: string;
+          quantity?: number;
+          unit_cost?: number;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "purchase_items_workspace_id_fkey";
+            columns: ["workspace_id"];
+            referencedRelation: "workspaces";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "purchase_items_purchase_id_fkey";
+            columns: ["purchase_id"];
+            referencedRelation: "purchases";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "purchase_items_product_id_fkey";
+            columns: ["product_id"];
+            referencedRelation: "products";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
       customer_credit_payments: {
         Row: {
           id: string;
@@ -777,6 +835,116 @@ export interface Database {
           total_paid: number;
           remaining: number;
           status: string;
+        };
+      };
+      create_purchase_with_payment: {
+        Args: {
+          p_workspace_id: string;
+          p_supplier_id: string;
+          p_bill_number?: string | null;
+          p_purchase_date: string;
+          p_total_amount: number;
+          p_initial_payment?: number;
+          p_payment_method?: string;
+          p_notes?: string | null;
+        };
+        Returns: {
+          purchase: Database["public"]["Tables"]["purchases"]["Row"];
+          payment: Database["public"]["Tables"]["supplier_payments"]["Row"] | null;
+          paid_amount: number;
+          remaining_amount: number;
+        };
+      };
+      record_supplier_payment: {
+        Args: {
+          p_workspace_id: string;
+          p_supplier_id: string;
+          p_purchase_id?: string | null;
+          p_amount: number;
+          p_payment_date?: string;
+          p_payment_method?: string;
+          p_notes?: string | null;
+        };
+        Returns: {
+          payment: Database["public"]["Tables"]["supplier_payments"]["Row"];
+          purchase_id: string | null;
+          remaining_amount: number;
+        };
+      };
+      create_product_with_opening_stock: {
+        Args: {
+          p_workspace_id: string;
+          p_name: string;
+          p_category?: string | null;
+          p_unit?: string;
+          p_purchase_price?: number;
+          p_selling_price?: number;
+          p_opening_stock?: number;
+          p_low_stock_threshold?: number;
+          p_notes?: string | null;
+        };
+        Returns: {
+          product: Database["public"]["Tables"]["products"]["Row"];
+          movement: Database["public"]["Tables"]["inventory_movements"]["Row"] | null;
+        };
+      };
+      record_inventory_movement: {
+        Args: {
+          p_workspace_id: string;
+          p_product_id: string;
+          p_movement_type: string;
+          p_quantity: number;
+          p_unit_cost?: number | null;
+          p_reference_type?: string | null;
+          p_reference_id?: string | null;
+          p_notes?: string | null;
+          p_movement_date?: string;
+        };
+        Returns: {
+          product: Database["public"]["Tables"]["products"]["Row"];
+          movement: Database["public"]["Tables"]["inventory_movements"]["Row"];
+          previous_stock: number;
+          new_stock: number;
+        };
+      };
+      record_stock_reconciliation: {
+        Args: {
+          p_workspace_id: string;
+          p_product_id: string;
+          p_physical_stock: number;
+          p_reason?: string | null;
+          p_movement_date?: string;
+        };
+        Returns: {
+          product: Database["public"]["Tables"]["products"]["Row"];
+          movement: Database["public"]["Tables"]["inventory_movements"]["Row"] | null;
+          difference: number;
+        };
+      };
+      save_purchase_item_with_inventory: {
+        Args: {
+          p_workspace_id: string;
+          p_purchase_id: string;
+          p_product_id: string;
+          p_quantity: number;
+          p_unit_cost: number;
+          p_item_id?: string | null;
+        };
+        Returns: {
+          item: Database["public"]["Tables"]["purchase_items"]["Row"];
+          product: Database["public"]["Tables"]["products"]["Row"];
+          current_stock: number;
+        };
+      };
+      delete_purchase_item_with_inventory: {
+        Args: {
+          p_workspace_id: string;
+          p_item_id: string;
+        };
+        Returns: {
+          deleted_item_id: string;
+          product_id: string;
+          current_stock: number;
         };
       };
     };
