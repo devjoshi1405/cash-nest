@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -8,15 +8,16 @@ import { Modal } from "@/components/shared/Modal";
 import { DailySale } from "@/types/shop";
 import { formatINR } from "@/lib/currency";
 import { toISODateString } from "@/lib/date";
+import { createDailySale, calculateDailySalesTotal } from "@/lib/data/shop/sales";
 import { toast } from "sonner";
-import { Calculator } from "lucide-react";
+import { Calculator, Loader2 } from "lucide-react";
 
 const dailySaleSchema = z.object({
   date: z.string().min(1, "Date is required"),
-  cashSales: z.number().min(0, "Cannot be negative"),
-  upiSales: z.number().min(0, "Cannot be negative"),
-  cardSales: z.number().min(0, "Cannot be negative"),
-  otherSales: z.number().min(0, "Cannot be negative"),
+  cashSales: z.number().min(0, "Amount cannot be negative"),
+  upiSales: z.number().min(0, "Amount cannot be negative"),
+  cardSales: z.number().min(0, "Amount cannot be negative"),
+  otherSales: z.number().min(0, "Amount cannot be negative"),
   notes: z.string().optional(),
 });
 
@@ -26,19 +27,26 @@ export interface AddDailySaleModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: (sale: DailySale) => void;
+  initialDate?: string;
 }
 
-export function AddDailySaleModal({ isOpen, onClose, onSuccess }: AddDailySaleModalProps) {
+export function AddDailySaleModal({
+  isOpen,
+  onClose,
+  onSuccess,
+  initialDate,
+}: AddDailySaleModalProps) {
   const {
     register,
     handleSubmit,
     watch,
     reset,
+    setError,
     formState: { errors, isSubmitting },
   } = useForm<DailySaleFormValues>({
     resolver: zodResolver(dailySaleSchema),
     defaultValues: {
-      date: toISODateString(),
+      date: initialDate || toISODateString(),
       cashSales: 0,
       upiSales: 0,
       cardSales: 0,
@@ -47,51 +55,75 @@ export function AddDailySaleModal({ isOpen, onClose, onSuccess }: AddDailySaleMo
     },
   });
 
+  useEffect(() => {
+    if (isOpen) {
+      reset({
+        date: initialDate || toISODateString(),
+        cashSales: 0,
+        upiSales: 0,
+        cardSales: 0,
+        otherSales: 0,
+        notes: "",
+      });
+    }
+  }, [isOpen, initialDate, reset]);
+
   const cash = watch("cashSales") || 0;
   const upi = watch("upiSales") || 0;
   const card = watch("cardSales") || 0;
   const other = watch("otherSales") || 0;
 
-  const totalCalculated = Number(cash) + Number(upi) + Number(card) + Number(other);
+  const totalCalculated = calculateDailySalesTotal(
+    Number(cash),
+    Number(upi),
+    Number(card),
+    Number(other)
+  );
 
-  const onSubmit = (data: DailySaleFormValues) => {
-    const total =
-      Number(data.cashSales) +
-      Number(data.upiSales) +
-      Number(data.cardSales) +
-      Number(data.otherSales);
+  const onSubmit = async (data: DailySaleFormValues) => {
+    const cashVal = Number(data.cashSales) || 0;
+    const upiVal = Number(data.upiSales) || 0;
+    const cardVal = Number(data.cardSales) || 0;
+    const otherVal = Number(data.otherSales) || 0;
+
+    const total = calculateDailySalesTotal(cashVal, upiVal, cardVal, otherVal);
 
     if (total <= 0) {
-      toast.error("Total daily sales must be greater than 0");
+      toast.error("Enter at least one sales amount.");
+      setError("cashSales", { message: "Enter at least one amount greater than 0" });
       return;
     }
 
-    const newSale: DailySale = {
-      id: `sale-${Date.now()}`,
+    const res = await createDailySale({
       date: data.date,
-      cashSales: Number(data.cashSales),
-      upiSales: Number(data.upiSales),
-      cardSales: Number(data.cardSales),
-      otherSales: Number(data.otherSales),
-      totalSales: total,
+      cashSales: cashVal,
+      upiSales: upiVal,
+      cardSales: cardVal,
+      otherSales: otherVal,
       notes: data.notes,
-    };
+    });
 
-    if (onSuccess) {
-      onSuccess(newSale);
+    if (res.error) {
+      toast.error(res.error);
+      return;
     }
 
-    toast.success(`Daily sales of ${formatINR(total)} recorded successfully!`);
-    reset();
-    onClose();
+    if (res.data) {
+      toast.success(`Daily sales of ${formatINR(total)} saved successfully.`);
+      if (onSuccess) {
+        onSuccess(res.data);
+      }
+      reset();
+      onClose();
+    }
   };
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Daily Sales Entry"
-      description="Record counter cash, UPI QR payments, and card collections for the day."
+      title="Record Daily Sales"
+      description="Record counter cash, UPI QR code, and card POS swipe collections for the day."
       maxWidth="md"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -102,21 +134,33 @@ export function AddDailySaleModal({ isOpen, onClose, onSuccess }: AddDailySaleMo
           <input
             type="date"
             {...register("date")}
-            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
+            className="w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-none transition-all"
           />
+          {errors.date && (
+            <p className="text-[11px] text-rose-500 font-medium mt-1">
+              {errors.date.message}
+            </p>
+          )}
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-emerald-700 dark:text-emerald-400 mb-1">
               Cash Sales (₹) *
             </label>
             <input
               type="number"
-              placeholder="3800"
+              step="any"
+              inputMode="decimal"
+              placeholder="0"
               {...register("cashSales", { valueAsNumber: true })}
-              className="w-full rounded-lg border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/40 dark:bg-emerald-950/20 px-3 py-2 text-sm text-slate-900 dark:text-white font-bold focus:outline-none"
+              className="w-full rounded-xl border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/40 dark:bg-emerald-950/20 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-none transition-all"
             />
+            {errors.cashSales && (
+              <p className="text-[11px] text-rose-500 font-medium mt-1">
+                {errors.cashSales.message}
+              </p>
+            )}
           </div>
 
           <div>
@@ -125,24 +169,38 @@ export function AddDailySaleModal({ isOpen, onClose, onSuccess }: AddDailySaleMo
             </label>
             <input
               type="number"
-              placeholder="2400"
+              step="any"
+              inputMode="decimal"
+              placeholder="0"
               {...register("upiSales", { valueAsNumber: true })}
-              className="w-full rounded-lg border border-blue-200 dark:border-blue-800/60 bg-blue-50/40 dark:bg-blue-950/20 px-3 py-2 text-sm text-slate-900 dark:text-white font-bold focus:outline-none"
+              className="w-full rounded-xl border border-blue-200 dark:border-blue-800/60 bg-blue-50/40 dark:bg-blue-950/20 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all"
             />
+            {errors.upiSales && (
+              <p className="text-[11px] text-rose-500 font-medium mt-1">
+                {errors.upiSales.message}
+              </p>
+            )}
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-xs font-semibold text-purple-700 dark:text-purple-400 mb-1">
               Card POS Sales (₹)
             </label>
             <input
               type="number"
-              placeholder="300"
+              step="any"
+              inputMode="decimal"
+              placeholder="0"
               {...register("cardSales", { valueAsNumber: true })}
-              className="w-full rounded-lg border border-purple-200 dark:border-purple-800/60 bg-purple-50/40 dark:bg-purple-950/20 px-3 py-2 text-sm text-slate-900 dark:text-white font-bold focus:outline-none"
+              className="w-full rounded-xl border border-purple-200 dark:border-purple-800/60 bg-purple-50/40 dark:bg-purple-950/20 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white font-bold focus:ring-2 focus:ring-purple-500 focus:outline-none transition-all"
             />
+            {errors.cardSales && (
+              <p className="text-[11px] text-rose-500 font-medium mt-1">
+                {errors.cardSales.message}
+              </p>
+            )}
           </div>
 
           <div>
@@ -151,10 +209,17 @@ export function AddDailySaleModal({ isOpen, onClose, onSuccess }: AddDailySaleMo
             </label>
             <input
               type="number"
+              step="any"
+              inputMode="decimal"
               placeholder="0"
               {...register("otherSales", { valueAsNumber: true })}
-              className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white font-bold focus:outline-none"
+              className="w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white font-bold focus:ring-2 focus:ring-slate-500 focus:outline-none transition-all"
             />
+            {errors.otherSales && (
+              <p className="text-[11px] text-rose-500 font-medium mt-1">
+                {errors.otherSales.message}
+              </p>
+            )}
           </div>
         </div>
 
@@ -181,7 +246,7 @@ export function AddDailySaleModal({ isOpen, onClose, onSuccess }: AddDailySaleMo
             type="text"
             placeholder="e.g. Festival rush, rainy morning slow footfall"
             {...register("notes")}
-            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none"
+            className="w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3.5 py-2.5 text-sm text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-none transition-all"
           />
         </div>
 
@@ -189,16 +254,18 @@ export function AddDailySaleModal({ isOpen, onClose, onSuccess }: AddDailySaleMo
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            disabled={isSubmitting}
+            className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSubmitting}
-            className="rounded-lg bg-amber-600 hover:bg-amber-700 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer"
+            className="flex items-center gap-2 rounded-xl bg-amber-600 hover:bg-amber-700 px-5 py-2.5 text-xs font-semibold text-white shadow-sm transition-all cursor-pointer disabled:opacity-50"
           >
-            Save Daily Sales
+            {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {isSubmitting ? "Saving..." : "Save Daily Sales"}
           </button>
         </div>
       </form>
