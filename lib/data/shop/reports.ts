@@ -3,6 +3,7 @@ import { DailySalesTrendPoint } from "@/components/charts/DailySalesLineChart";
 import { SplitItem } from "@/components/charts/CashVsOnlineDonutChart";
 import { ShopMonthlyBarData } from "@/components/charts/MonthlyRevenueBarChart";
 import { ExpenseCategoryDistribution } from "@/types/home";
+import { CustomerOutstandingSummary } from "@/types/shop";
 import {
   toISODateString,
   formatDate,
@@ -15,6 +16,10 @@ import {
   calculateDailySalesTotal,
   calculateOnlineSales,
 } from "./sales";
+import {
+  getCustomerCreditSummary,
+  getCustomerOutstandingSummary,
+} from "./customer-credit";
 
 export interface SupplierOutstandingItem {
   id: string;
@@ -56,6 +61,15 @@ export interface ShopReportsData {
   totalExpenses: number;
   expensesCount: number;
   expenseCategories: ExpenseCategoryDistribution[];
+
+  // Customer Credit / Udhaar (Phase 8)
+  totalCreditIssued: number;
+  totalCreditCollected: number;
+  currentOutstandingCredit: number;
+  currentOverdueCredit: number;
+  creditTrend: Array<{ month: string; issued: number; collected: number }>;
+  collectionPaymentMethods: SplitItem[];
+  customerOutstandingList: CustomerOutstandingSummary[];
 
   // Inventory & Stock (Phase 7)
   totalInventoryValue: number;
@@ -177,7 +191,7 @@ export async function getShopReportsData(
   const trendWindowStart = recent6[0]?.startDate || startDate || "";
 
   try {
-    // 1. Parallel queries for Sales, Purchases, Expenses, Suppliers, Products, Movements, and 6-Month Windows
+    // 1. Parallel queries for Sales, Purchases, Expenses, Customer Credits, Suppliers, Products, Movements, and 6-Month Windows
     let salesQuery = supabase
       .from("daily_sales")
       .select("*")
@@ -194,13 +208,24 @@ export async function getShopReportsData(
       .eq("workspace_id", workspaceId)
       .eq("type", "expense");
 
-    let suppliersQuery = supabase
+    let creditsIssuedQuery = supabase
+      .from("customer_credits")
+      .select("original_amount, credit_date")
+      .eq("workspace_id", workspaceId)
+      .neq("is_archived", true);
+
+    let creditPaymentsQuery = supabase
+      .from("customer_credit_payments")
+      .select("amount, payment_date, payment_method, customer_credits!inner(workspace_id)")
+      .eq("customer_credits.workspace_id", workspaceId);
+
+    const suppliersQuery = supabase
       .from("suppliers")
       .select("id, name, phone, purchases(total_amount), supplier_payments(amount)")
       .eq("workspace_id", workspaceId)
       .neq("is_active", false);
 
-    let productsQuery = supabase
+    const productsQuery = supabase
       .from("products")
       .select("*")
       .eq("workspace_id", workspaceId)
@@ -211,35 +236,52 @@ export async function getShopReportsData(
       .select("movement_type, quantity, unit_cost, movement_date")
       .eq("workspace_id", workspaceId);
 
-    let trendSalesQuery = supabase
+    const trendSalesQuery = supabase
       .from("daily_sales")
       .select("sale_date, cash_amount, upi_amount, card_amount, other_amount")
       .eq("workspace_id", workspaceId)
       .gte("sale_date", trendWindowStart);
 
-    let trendPurchasesQuery = supabase
+    const trendPurchasesQuery = supabase
       .from("purchases")
       .select("purchase_date, total_amount")
       .eq("workspace_id", workspaceId)
       .gte("purchase_date", trendWindowStart);
 
-    let trendExpensesQuery = supabase
+    const trendExpensesQuery = supabase
       .from("transactions")
       .select("transaction_date, amount")
       .eq("workspace_id", workspaceId)
       .eq("type", "expense")
       .gte("transaction_date", trendWindowStart);
 
+    const trendCreditsQuery = supabase
+      .from("customer_credits")
+      .select("original_amount, credit_date")
+      .eq("workspace_id", workspaceId)
+      .gte("credit_date", trendWindowStart)
+      .neq("is_archived", true);
+
+    const trendCreditPaymentsQuery = supabase
+      .from("customer_credit_payments")
+      .select("amount, payment_date, customer_credits!inner(workspace_id)")
+      .eq("customer_credits.workspace_id", workspaceId)
+      .gte("payment_date", trendWindowStart);
+
     if (startDate) {
       salesQuery = salesQuery.gte("sale_date", startDate);
       purchasesQuery = purchasesQuery.gte("purchase_date", startDate);
       expensesQuery = expensesQuery.gte("transaction_date", startDate);
+      creditsIssuedQuery = creditsIssuedQuery.gte("credit_date", startDate);
+      creditPaymentsQuery = creditPaymentsQuery.gte("payment_date", startDate);
       movementsQuery = movementsQuery.gte("movement_date", startDate);
     }
     if (endDate) {
       salesQuery = salesQuery.lte("sale_date", endDate);
       purchasesQuery = purchasesQuery.lte("purchase_date", endDate);
       expensesQuery = expensesQuery.lte("transaction_date", endDate);
+      creditsIssuedQuery = creditsIssuedQuery.lte("credit_date", endDate);
+      creditPaymentsQuery = creditPaymentsQuery.lte("payment_date", endDate);
       movementsQuery = movementsQuery.lte("movement_date", endDate);
     }
 
@@ -251,22 +293,34 @@ export async function getShopReportsData(
       salesRes,
       purchasesRes,
       expensesRes,
+      creditsIssuedRes,
+      creditPaymentsRes,
       suppliersRes,
       productsRes,
       movementsRes,
       trendSalesRes,
       trendPurchasesRes,
       trendExpensesRes,
+      trendCreditsRes,
+      trendCreditPaymentsRes,
+      customerSummaryRes,
+      customerOutstandingListRes,
     ] = await Promise.all([
       salesQuery,
       purchasesQuery,
       expensesQuery,
+      creditsIssuedQuery,
+      creditPaymentsQuery,
       suppliersQuery,
       productsQuery,
       movementsQuery,
       trendSalesQuery,
       trendPurchasesQuery,
       trendExpensesQuery,
+      trendCreditsQuery,
+      trendCreditPaymentsQuery,
+      getCustomerCreditSummary(workspaceId),
+      getCustomerOutstandingSummary(workspaceId),
     ]);
 
     // 2. Aggregate Sales
@@ -343,7 +397,7 @@ export async function getShopReportsData(
       const amt = Number(p.total_amount || 0);
       totalPurchases += amt;
       const paidForBill = (p.supplier_payments || []).reduce(
-        (sum: number, sp: any) => sum + Number(sp.amount || 0),
+        (sum: number, sp: { amount?: number }) => sum + Number(sp.amount || 0),
         0
       );
       totalPurchasesPaid += paidForBill;
@@ -360,7 +414,7 @@ export async function getShopReportsData(
     for (const exp of rawExpenses) {
       const amt = Number(exp.amount || 0);
       totalExpenses += amt;
-      const catName = (exp.categories as any)?.name || "Other";
+      const catName = (exp.categories as { name?: string } | null)?.name || "Other";
       categoryMap[catName] = (categoryMap[catName] || 0) + amt;
     }
 
@@ -373,7 +427,80 @@ export async function getShopReportsData(
       }))
       .sort((a, b) => b.amount - a.amount);
 
-    // 5. Aggregate Inventory & Stock (Phase 7)
+    // 5. Aggregate Customer Credit & Repayments (Phase 8)
+    const totalCreditIssued = (creditsIssuedRes.data || []).reduce(
+      (sum, row) => sum + Number(row.original_amount || 0),
+      0
+    );
+
+    const rawCreditPayments = creditPaymentsRes.data || [];
+    let totalCreditCollected = 0;
+    const repaymentMethodTotals: Record<string, number> = {
+      Cash: 0,
+      UPI: 0,
+      Bank: 0,
+      "Credit Card": 0,
+      "Debit Card": 0,
+      Other: 0,
+    };
+
+    for (const cp of rawCreditPayments) {
+      const amt = Number(cp.amount || 0);
+      totalCreditCollected += amt;
+      const m = cp.payment_method || "Cash";
+      repaymentMethodTotals[m] = (repaymentMethodTotals[m] || 0) + amt;
+    }
+
+    const repaymentColors: Record<string, string> = {
+      Cash: "#10B981",
+      UPI: "#3B82F6",
+      Bank: "#8B5CF6",
+      "Credit Card": "#F59E0B",
+      "Debit Card": "#EC4899",
+      Other: "#64748B",
+    };
+
+    const collectionPaymentMethods: SplitItem[] = Object.entries(repaymentMethodTotals)
+      .filter(([_, val]) => val > 0)
+      .map(([name, val]) => ({
+        name,
+        value: Math.round(val),
+        percentage:
+          totalCreditCollected > 0
+            ? Math.round((val / totalCreditCollected) * 100)
+            : 0,
+        color: repaymentColors[name] || "#64748B",
+      }))
+      .sort((a, b) => b.value - a.value);
+
+    // Monthly Credit Issued vs Collected Trend (6 Months)
+    const tCreds = trendCreditsRes.data || [];
+    const tPays = trendCreditPaymentsRes.data || [];
+
+    const creditTrend = recent6.map((m) => {
+      let issued = 0;
+      let collected = 0;
+
+      for (const c of tCreds) {
+        if (c.credit_date >= m.startDate && c.credit_date <= m.endDate) {
+          issued += Number(c.original_amount || 0);
+        }
+      }
+
+      for (const p of tPays) {
+        if (p.payment_date >= m.startDate && p.payment_date <= m.endDate) {
+          collected += Number(p.amount || 0);
+        }
+      }
+
+      return {
+        month: m.label,
+        issued: Math.round(issued),
+        collected: Math.round(collected),
+      };
+    });
+
+    // 6. Aggregate Inventory & Stock (Phase 7)
     const rawProducts = productsRes.data || [];
     let totalInventoryValue = 0;
     let lowStockProductsCount = 0;
@@ -430,7 +557,7 @@ export async function getShopReportsData(
       }))
       .sort((a, b) => b.inventoryValue - a.inventoryValue);
 
-    // 6. Aggregate Stock Movement Summary for period
+    // 7. Aggregate Stock Movement Summary for period
     const rawMovements = movementsRes.data || [];
     let addedCount = 0;
     let addedVal = 0;
@@ -461,18 +588,18 @@ export async function getShopReportsData(
       movementsCount: rawMovements.length,
     };
 
-    // 7. Aggregate Supplier Outstanding Dues
+    // 8. Aggregate Supplier Outstanding Dues
     const rawSuppliers = suppliersRes.data || [];
     let totalSupplierDues = 0;
     const supplierOutstandings: SupplierOutstandingItem[] = [];
 
     for (const sup of rawSuppliers) {
       const sPurchases = (sup.purchases || []).reduce(
-        (sum: number, p: any) => sum + Number(p.total_amount || 0),
+        (sum: number, p: { total_amount?: number }) => sum + Number(p.total_amount || 0),
         0
       );
       const sPaid = (sup.supplier_payments || []).reduce(
-        (sum: number, sp: any) => sum + Number(sp.amount || 0),
+        (sum: number, sp: { amount?: number }) => sum + Number(sp.amount || 0),
         0
       );
       const pending = Math.max(0, sPurchases - sPaid);
@@ -493,7 +620,7 @@ export async function getShopReportsData(
     // Sort by largest pending dues
     supplierOutstandings.sort((a, b) => b.pendingAmount - a.pendingAmount);
 
-    // 8. Monthly Revenue vs Purchases vs Expenses Trend (6 Months Bar Chart)
+    // 9. Monthly Revenue vs Purchases vs Expenses Trend (6 Months Bar Chart)
     const tSales = trendSalesRes.data || [];
     const tPurchases = trendPurchasesRes.data || [];
     const tExpenses = trendExpensesRes.data || [];
@@ -534,7 +661,13 @@ export async function getShopReportsData(
     });
 
     const hasData =
-      totalSales > 0 || totalPurchases > 0 || totalExpenses > 0 || supplierOutstandings.length > 0 || rawProducts.length > 0;
+      totalSales > 0 ||
+      totalPurchases > 0 ||
+      totalExpenses > 0 ||
+      totalCreditIssued > 0 ||
+      totalCreditCollected > 0 ||
+      supplierOutstandings.length > 0 ||
+      rawProducts.length > 0;
 
     return {
       totalSales,
@@ -556,6 +689,13 @@ export async function getShopReportsData(
       totalExpenses,
       expensesCount: rawExpenses.length,
       expenseCategories,
+      totalCreditIssued: Math.round(totalCreditIssued * 100) / 100,
+      totalCreditCollected: Math.round(totalCreditCollected * 100) / 100,
+      currentOutstandingCredit: customerSummaryRes.totalOutstanding,
+      currentOverdueCredit: customerSummaryRes.totalOverdue,
+      creditTrend,
+      collectionPaymentMethods,
+      customerOutstandingList: customerOutstandingListRes,
       totalInventoryValue: Math.round(totalInventoryValue * 100) / 100,
       totalProductsCount: rawProducts.length,
       lowStockProductsCount,
@@ -589,6 +729,13 @@ export async function getShopReportsData(
       totalExpenses: 0,
       expensesCount: 0,
       expenseCategories: [],
+      totalCreditIssued: 0,
+      totalCreditCollected: 0,
+      currentOutstandingCredit: 0,
+      currentOverdueCredit: 0,
+      creditTrend: [],
+      collectionPaymentMethods: [],
+      customerOutstandingList: [],
       totalInventoryValue: 0,
       totalProductsCount: 0,
       lowStockProductsCount: 0,

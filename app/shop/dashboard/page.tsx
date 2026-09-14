@@ -33,6 +33,7 @@ import {
   Boxes,
   Package,
   AlertTriangle,
+  UserCheck,
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -58,6 +59,11 @@ export default function ShopDashboardPage() {
     pendingSupplierPayments: 0,
     isTodayRecorded: false,
     todaySale: null,
+    customerCreditOutstanding: 0,
+    customerCreditOverdue: 0,
+    customerCreditReceivedThisMonth: 0,
+    customerCreditPendingCount: 0,
+    topOutstandingCustomers: [],
     totalInventoryValue: 0,
     totalProductsCount: 0,
     lowStockCount: 0,
@@ -122,7 +128,7 @@ export default function ShopDashboardPage() {
     <div className="space-y-6">
       <PageHeader
         title="Pan Shop Dashboard"
-        description="Daily counter sales, cash vs UPI collections, wholesale purchases, expenses and dues."
+        description="Daily counter sales, cash vs UPI collections, wholesale purchases, expenses and customer khata accounts."
         badge="🏪 Pan Shop Workspace"
       >
         <div className="flex items-center gap-2">
@@ -263,13 +269,12 @@ export default function ShopDashboardPage() {
           />
 
           <StatCard
-            title="Estimated Profit"
-            amount="Pending"
-            isRawString
-            icon={LineChart}
-            colorScheme="indigo"
-            badge="Phase 8"
-            subtitle="Requires Inventory & COGS"
+            title="Customer Credit (Udhaar)"
+            amount={dashboardData.customerCreditOutstanding}
+            icon={CreditCard}
+            colorScheme="rose"
+            badge={dashboardData.customerCreditOverdue > 0 ? `${formatINR(dashboardData.customerCreditOverdue)} Overdue` : undefined}
+            subtitle={`${dashboardData.customerCreditPendingCount} pending accounts`}
           />
 
           <StatCard
@@ -283,7 +288,7 @@ export default function ShopDashboardPage() {
         </div>
       )}
 
-      {/* Monthly Performance & Inventory Highlight Bar */}
+      {/* Monthly Performance & Receivables Highlight Bar */}
       {!loading && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm flex items-center justify-between">
@@ -322,16 +327,23 @@ export default function ShopDashboardPage() {
             </p>
           </div>
 
-          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
-              Purchases This Month
-            </span>
-            <p className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1">
-              {formatINR(dashboardData.thisMonthPurchases)}
-            </p>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Stock procurement bills
-            </p>
+          <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm flex items-center justify-between">
+            <div>
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                Customer Udhaar Receivables
+              </span>
+              <p className="text-xl font-black text-rose-600 dark:text-rose-400 mt-1">
+                {formatINR(dashboardData.customerCreditOutstanding)}
+              </p>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {formatINR(dashboardData.customerCreditReceivedThisMonth)} collected this mo.
+              </p>
+            </div>
+            {dashboardData.customerCreditOverdue > 0 && (
+              <span className="text-xs font-bold px-2 py-1 rounded-md bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800">
+                {formatINR(dashboardData.customerCreditOverdue)} Overdue
+              </span>
+            )}
           </div>
 
           <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm flex items-center justify-between">
@@ -392,21 +404,22 @@ export default function ShopDashboardPage() {
             </div>
             <div>
               <p className="font-bold text-sm text-slate-700 dark:text-slate-300">
-                Profit Calculation Available in Phase 8
+                Profit Calculation Available in Phase 9
               </p>
               <p className="text-xs text-slate-400 max-w-sm mt-1">
-                True profit cannot be calculated from sales alone. Cost of Goods Sold (COGS) and inventory valuation will connect here.
+                True profit cannot be calculated from sales alone. Cost of Goods Sold (COGS) and inventory deduction will connect here.
               </p>
             </div>
             <span className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 px-3 py-1 rounded-full border border-indigo-200 dark:border-indigo-800">
-              Pending: Phase 7 (Inventory & COGS)
+              Pending: Phase 9 (Profit & Loss / COGS)
             </span>
           </div>
         </ChartCard>
       </div>
 
-      {/* Mixed Shop Activity Feed & Quick Operations Links */}
+      {/* Top Customer Credit Debts & Mixed Activity Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Mixed Activity Feed */}
         <div className="lg:col-span-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4">
           <div className="flex items-center justify-between">
             <div>
@@ -414,7 +427,7 @@ export default function ShopDashboardPage() {
                 Recent Shop Operations Activity
               </h3>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Real-time activity across sales, stock purchases, supplier payments and expenses
+                Real-time activity across counter sales, purchases, supplier payments, expenses, and customer credit
               </p>
             </div>
             <Link
@@ -452,6 +465,16 @@ export default function ShopDashboardPage() {
                   sign = "-";
                   amountColor = "text-rose-600 dark:text-rose-400";
                   icon = <TrendingDown className="h-4 w-4" />;
+                } else if (act.type === "credit_given") {
+                  badgeBg = "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300";
+                  sign = "";
+                  amountColor = "text-amber-600 dark:text-amber-400";
+                  icon = <CreditCard className="h-4 w-4" />;
+                } else if (act.type === "credit_collected") {
+                  badgeBg = "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300";
+                  sign = "+";
+                  amountColor = "text-emerald-600 dark:text-emerald-400";
+                  icon = <UserCheck className="h-4 w-4" />;
                 }
 
                 return (
@@ -484,7 +507,11 @@ export default function ShopDashboardPage() {
                           ? "Stock Bill"
                           : act.type === "payment"
                           ? "Vendor Payment"
-                          : "Shop Expense"}
+                          : act.type === "expense"
+                          ? "Shop Expense"
+                          : act.type === "credit_given"
+                          ? "Udhaar Tab"
+                          : "Khata Repayment"}
                       </span>
                     </div>
                   </div>
@@ -494,86 +521,99 @@ export default function ShopDashboardPage() {
           )}
         </div>
 
-        {/* Quick Operations Overview Box */}
+        {/* Top Customer Udhaar Dues & Quick Operations Box */}
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 shadow-sm space-y-4 flex flex-col justify-between">
           <div className="space-y-3">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">
-              Quick Navigation
-            </h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                <CreditCard className="h-4 w-4 text-amber-500" />
+                Top Customer Credit
+              </h3>
+              <Link
+                href="/shop/customer-credit"
+                className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline"
+              >
+                View All Khata
+              </Link>
+            </div>
 
-            <Link
-              href="/shop/inventory"
-              className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between hover:border-amber-500/50 transition-colors group"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-600">
-                  <Package className="h-4 w-4" />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-blue-600">
-                    Inventory & Products
-                  </p>
-                  <p className="text-[11px] text-slate-400">
-                    {dashboardData.totalProductsCount} items • {formatINR(dashboardData.totalInventoryValue)} value
-                  </p>
-                </div>
+            {dashboardData.topOutstandingCustomers.length === 0 ? (
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 text-center text-xs text-slate-400">
+                No outstanding customer credits.
               </div>
-              <ArrowRight className="h-4 w-4 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all" />
-            </Link>
+            ) : (
+              <div className="space-y-2">
+                {dashboardData.topOutstandingCustomers.map((d, idx) => (
+                  <div
+                    key={idx}
+                    className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 flex items-center justify-between text-xs"
+                  >
+                    <div>
+                      <span className="font-bold text-slate-900 dark:text-white block">
+                        {d.customerName}
+                      </span>
+                      <span className="text-[10px] text-slate-400">
+                        {d.status === "Overdue" ? (
+                          <span className="text-rose-600 font-semibold">Overdue payment</span>
+                        ) : (
+                          "Pending balance"
+                        )}
+                      </span>
+                    </div>
+                    <span className="font-bold text-rose-600 dark:text-rose-400">
+                      {formatINR(d.pendingAmount)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
-            <Link
-              href="/shop/suppliers"
-              className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between hover:border-amber-500/50 transition-colors group"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950 text-amber-600">
-                  <Users className="h-4 w-4" />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-amber-600">
-                    Distributors & Suppliers
-                  </p>
-                  <p className="text-[11px] text-slate-400">Manage vendor accounts & balances</p>
-                </div>
-              </div>
-              <ArrowRight className="h-4 w-4 text-slate-400 group-hover:text-amber-600 group-hover:translate-x-0.5 transition-all" />
-            </Link>
+            {/* Quick Navigation Links */}
+            <div className="pt-2 space-y-2">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                Quick Navigation
+              </span>
 
-            <Link
-              href="/shop/purchases"
-              className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between hover:border-amber-500/50 transition-colors group"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950 text-emerald-600">
-                  <Receipt className="h-4 w-4" />
+              <Link
+                href="/shop/customer-credit"
+                className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between hover:border-amber-500/50 transition-colors group text-xs"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-950 text-amber-600">
+                    <CreditCard className="h-3.5 w-3.5" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-slate-900 dark:text-white group-hover:text-amber-600">
+                      Customer Khata / Udhaar
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      {formatINR(dashboardData.customerCreditOutstanding)} outstanding
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-emerald-600">
-                    Stock Invoices & Bills
-                  </p>
-                  <p className="text-[11px] text-slate-400">Record stock delivery invoices</p>
-                </div>
-              </div>
-              <ArrowRight className="h-4 w-4 text-slate-400 group-hover:text-emerald-600 group-hover:translate-x-0.5 transition-all" />
-            </Link>
+                <ArrowRight className="h-3.5 w-3.5 text-slate-400 group-hover:text-amber-600 group-hover:translate-x-0.5 transition-all" />
+              </Link>
 
-            <Link
-              href="/shop/expenses"
-              className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between hover:border-rose-500/50 transition-colors group"
-            >
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-lg bg-rose-50 dark:bg-rose-950 text-rose-600">
-                  <TrendingDown className="h-4 w-4" />
+              <Link
+                href="/shop/inventory"
+                className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 flex items-center justify-between hover:border-amber-500/50 transition-colors group text-xs"
+              >
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-950 text-blue-600">
+                    <Package className="h-3.5 w-3.5" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-slate-900 dark:text-white group-hover:text-blue-600">
+                      Inventory & Stock
+                    </p>
+                    <p className="text-[10px] text-slate-400">
+                      {dashboardData.totalProductsCount} items • {formatINR(dashboardData.totalInventoryValue)}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-rose-600">
-                    Shop Operating Expenses
-                  </p>
-                  <p className="text-[11px] text-slate-400">Rent, power bills, helper wages</p>
-                </div>
-              </div>
-              <ArrowRight className="h-4 w-4 text-slate-400 group-hover:text-rose-600 group-hover:translate-x-0.5 transition-all" />
-            </Link>
+                <ArrowRight className="h-3.5 w-3.5 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all" />
+              </Link>
+            </div>
           </div>
 
           <div className="pt-2">

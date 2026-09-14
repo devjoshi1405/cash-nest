@@ -5,95 +5,102 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Modal } from "@/components/shared/Modal";
-import { CustomerCreditPayment } from "@/types/shop";
+import { CustomerCredit, CustomerCreditPayment } from "@/types/shop";
 import { PaymentMethod } from "@/types/common";
+import { updateCustomerCreditPayment } from "@/lib/data/shop/customer-credit";
 import { formatINR } from "@/lib/currency";
-import { toISODateString } from "@/lib/date";
-import { recordCustomerCreditPayment } from "@/lib/data/shop/customer-credit";
 import { toast } from "sonner";
-import { Loader2, Zap } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
-export interface RecordCustomerPaymentModalProps {
+export interface EditCustomerPaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  creditId: string;
-  customerName: string;
-  remainingAmount: number;
-  onSuccess?: (payment: CustomerCreditPayment) => void;
+  payment: CustomerCreditPayment | null;
+  credit: CustomerCredit | null;
+  onSuccess?: (updatedPayment: CustomerCreditPayment) => void;
 }
 
-export function RecordCustomerPaymentModal({
+export function EditCustomerPaymentModal({
   isOpen,
   onClose,
-  creditId,
-  customerName,
-  remainingAmount,
+  payment,
+  credit,
   onSuccess,
-}: RecordCustomerPaymentModalProps) {
-  const custPaymentSchema = z
+}: EditCustomerPaymentModalProps) {
+  const originalCreditAmount = credit ? credit.creditAmount : 0;
+  const currentPaymentAmount = payment ? payment.amount : 0;
+  const otherPaymentsTotal = credit
+    ? (credit.payments || []).reduce(
+        (sum, p) => (p.id !== payment?.id ? sum + p.amount : sum),
+        0
+      )
+    : 0;
+
+  const maxAllowed = Math.max(0, originalCreditAmount - otherPaymentsTotal);
+
+  const editPaymentSchema = z
     .object({
       amount: z.number().positive("Amount must be greater than 0"),
       paymentMethod: z.enum(["Cash", "UPI", "Bank", "Credit Card", "Debit Card", "Card", "Other"]),
       date: z.string().min(1, "Date is required"),
       notes: z.string().optional(),
     })
-    .refine((data) => data.amount <= remainingAmount, {
-      message: `Payment cannot exceed the remaining balance of ${formatINR(remainingAmount)}.`,
+    .refine((data) => data.amount <= maxAllowed, {
+      message: `Payment amount cannot exceed ${formatINR(
+        maxAllowed
+      )} (maximum remaining for this credit).`,
       path: ["amount"],
     });
 
-  type CustPaymentFormValues = z.infer<typeof custPaymentSchema>;
+  type EditPaymentFormValues = z.infer<typeof editPaymentSchema>;
 
   const {
     register,
     handleSubmit,
     reset,
-    setValue,
     formState: { errors, isSubmitting },
-  } = useForm<CustPaymentFormValues>({
-    resolver: zodResolver(custPaymentSchema),
+  } = useForm<EditPaymentFormValues>({
+    resolver: zodResolver(editPaymentSchema),
     defaultValues: {
-      amount: remainingAmount > 0 ? remainingAmount : ("" as unknown as number),
-      paymentMethod: "Cash",
-      date: toISODateString(new Date()),
-      notes: "",
+      amount: currentPaymentAmount,
+      paymentMethod: payment?.paymentMethod || "Cash",
+      date: payment?.date || "",
+      notes: payment?.notes || "",
     },
   });
 
   useEffect(() => {
-    if (isOpen) {
+    if (payment && isOpen) {
       reset({
-        amount: remainingAmount > 0 ? remainingAmount : ("" as unknown as number),
-        paymentMethod: "Cash",
-        date: toISODateString(new Date()),
-        notes: "",
+        amount: payment.amount,
+        paymentMethod: payment.paymentMethod || "Cash",
+        date: payment.date || "",
+        notes: payment.notes || "",
       });
     }
-  }, [remainingAmount, isOpen, reset]);
+  }, [payment, isOpen, reset]);
 
-  const handleFullPaymentShortcut = () => {
-    setValue("amount", remainingAmount, { shouldValidate: true });
-  };
+  if (!payment || !credit) return null;
 
-  const onSubmit = async (data: CustPaymentFormValues) => {
+  const onSubmit = async (data: EditPaymentFormValues) => {
     try {
-      const payment = await recordCustomerCreditPayment({
-        creditId,
+      const updated = await updateCustomerCreditPayment({
+        paymentId: payment.id,
         amount: Number(data.amount),
-        paymentMethod: data.paymentMethod as PaymentMethod,
         date: data.date,
+        paymentMethod: data.paymentMethod as PaymentMethod,
         notes: data.notes,
       });
 
       if (onSuccess) {
-        onSuccess(payment);
+        onSuccess(updated);
       }
 
-      toast.success(`Received ${formatINR(data.amount)} payment from ${customerName}!`);
+      toast.success(`Repayment updated to ${formatINR(data.amount)}.`);
       onClose();
     } catch (err: unknown) {
-      console.error("Failed to record customer payment:", err);
-      const message = err instanceof Error ? err.message : "Unable to record payment.";
+      console.error("Failed to update payment:", err);
+      const message = err instanceof Error ? err.message : "Unable to update payment.";
       toast.error(message);
     }
   };
@@ -102,45 +109,28 @@ export function RecordCustomerPaymentModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Record Khata Repayment"
-      description={`Record collection from "${customerName}". Outstanding balance: ${formatINR(
-        remainingAmount
+      title="Edit Khata Repayment"
+      description={`Modify repayment receipt for "${credit.customerName}". Max allowed: ${formatINR(
+        maxAllowed
       )}`}
       maxWidth="sm"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        {/* Full Payment Shortcut */}
-        {remainingAmount > 0 && (
-          <div className="flex items-center justify-between p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs">
-            <span className="text-emerald-800 dark:text-emerald-300 font-medium">
-              Full Outstanding: <span className="font-bold">{formatINR(remainingAmount)}</span>
-            </span>
-            <button
-              type="button"
-              onClick={handleFullPaymentShortcut}
-              className="inline-flex items-center gap-1 font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/60 hover:bg-emerald-200 dark:hover:bg-emerald-800 px-2 py-1 rounded-md transition-colors cursor-pointer"
-            >
-              <Zap className="h-3 w-3" /> Receive Full {formatINR(remainingAmount)}
-            </button>
-          </div>
-        )}
-
         {/* Amount */}
         <div>
           <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-            Amount Received (₹ INR) *
+            Amount (₹ INR) *
           </label>
           <input
             type="number"
             step="any"
-            placeholder={String(remainingAmount)}
             {...register("amount", { valueAsNumber: true })}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500"
           />
           {errors.amount && <p className="mt-1 text-xs text-rose-500">{errors.amount.message}</p>}
         </div>
 
-        {/* Collection Method */}
+        {/* Payment Method */}
         <div>
           <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
             Collection Method *
@@ -178,7 +168,7 @@ export function RecordCustomerPaymentModal({
           </label>
           <input
             type="text"
-            placeholder="e.g. Paid cash after evening shift"
+            placeholder="e.g. Adjusted after verification"
             {...register("notes")}
             className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
           />
@@ -200,7 +190,7 @@ export function RecordCustomerPaymentModal({
             className="flex items-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer disabled:opacity-50"
           >
             {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Confirm Collection
+            Save Payment
           </button>
         </div>
       </form>

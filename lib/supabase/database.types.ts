@@ -674,6 +674,7 @@ export interface Database {
           due_date: string | null;
           notes: string | null;
           status: "pending" | "partial" | "paid" | "overdue";
+          is_archived: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -688,6 +689,7 @@ export interface Database {
           due_date?: string | null;
           notes?: string | null;
           status?: "pending" | "partial" | "paid" | "overdue";
+          is_archived?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -702,6 +704,7 @@ export interface Database {
           due_date?: string | null;
           notes?: string | null;
           status?: "pending" | "partial" | "paid" | "overdue";
+          is_archived?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -945,6 +948,87 @@ export interface Database {
           deleted_item_id: string;
           product_id: string;
           current_stock: number;
+        };
+      };
+      create_customer_credit_with_payment: {
+        Args: {
+          p_workspace_id: string;
+          p_customer_name: string;
+          p_phone?: string | null;
+          p_original_amount: number;
+          p_credit_date?: string;
+          p_due_date?: string | null;
+          p_notes?: string | null;
+          p_initial_payment?: number;
+          p_payment_method?: string;
+        };
+        Returns: {
+          credit: Database["public"]["Tables"]["customer_credits"]["Row"];
+          payment: Database["public"]["Tables"]["customer_credit_payments"]["Row"] | null;
+          amount_received: number;
+          remaining_amount: number;
+          status: string;
+        };
+      };
+      record_customer_credit_payment: {
+        Args: {
+          p_credit_id: string;
+          p_amount: number;
+          p_payment_date?: string;
+          p_payment_method?: string;
+          p_notes?: string | null;
+        };
+        Returns: {
+          payment: Database["public"]["Tables"]["customer_credit_payments"]["Row"];
+          credit_id: string;
+          total_paid: number;
+          remaining_amount: number;
+          status: string;
+        };
+      };
+      update_customer_credit_payment: {
+        Args: {
+          p_payment_id: string;
+          p_amount: number;
+          p_payment_date?: string;
+          p_payment_method?: string;
+          p_notes?: string | null;
+        };
+        Returns: {
+          payment: Database["public"]["Tables"]["customer_credit_payments"]["Row"];
+          credit_id: string;
+          total_paid: number;
+          remaining_amount: number;
+          status: string;
+        };
+      };
+      delete_customer_credit_payment: {
+        Args: {
+          p_payment_id: string;
+        };
+        Returns: {
+          deleted_payment_id: string;
+          credit_id: string;
+          total_paid: number;
+          remaining_amount: number;
+          status: string;
+        };
+      };
+      update_customer_credit: {
+        Args: {
+          p_credit_id: string;
+          p_customer_name: string;
+          p_phone?: string | null;
+          p_original_amount: number;
+          p_credit_date?: string;
+          p_due_date?: string | null;
+          p_notes?: string | null;
+        };
+        Returns: {
+          credit: Database["public"]["Tables"]["customer_credits"]["Row"];
+          total_paid: number;
+          remaining_amount: number;
+          status: string;
         };
       };
     };

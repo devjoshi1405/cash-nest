@@ -9,8 +9,11 @@ import { CashVsOnlineDonutChart } from "@/components/charts/CashVsOnlineDonutCha
 import { ExpenseCategoryDonutChart } from "@/components/charts/ExpenseCategoryDonutChart";
 import { MonthlyRevenueBarChart } from "@/components/charts/MonthlyRevenueBarChart";
 import { InventoryCategoryDonutChart } from "@/components/charts/InventoryCategoryDonutChart";
+import { CustomerCreditTrendChart } from "@/components/charts/CustomerCreditTrendChart";
 import { SkeletonCard } from "@/components/shared/SkeletonCard";
+import { StatusBadge } from "@/components/shared/StatusBadge";
 import { formatINR } from "@/lib/currency";
+import { formatDate } from "@/lib/date";
 import { getShopReportsData, ShopReportsData } from "@/lib/data/shop/reports";
 import { getAuthenticatedShopWorkspace } from "@/lib/data/shop/workspace";
 import {
@@ -28,6 +31,8 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Boxes,
+  CreditCard,
+  CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -73,6 +78,13 @@ export default function ShopReportsPage() {
     totalExpenses: 0,
     expensesCount: 0,
     expenseCategories: [],
+    totalCreditIssued: 0,
+    totalCreditCollected: 0,
+    currentOutstandingCredit: 0,
+    currentOverdueCredit: 0,
+    creditTrend: [],
+    collectionPaymentMethods: [],
+    customerOutstandingList: [],
     totalInventoryValue: 0,
     totalProductsCount: 0,
     lowStockProductsCount: 0,
@@ -144,7 +156,7 @@ export default function ShopReportsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Pan Shop Reports & Analytics"
-        description="Comprehensive analytics of counter revenue, wholesale stock procurement, inventory valuation, operating overheads and supplier balances."
+        description="Comprehensive analytics of counter revenue, wholesale procurement, customer credit ledgers, inventory valuation, and supplier dues."
         badge="🏪 Pan Shop Workspace"
       >
         <div className="flex flex-wrap items-center gap-2">
@@ -256,42 +268,28 @@ export default function ShopReportsPage() {
           />
 
           <StatCard
-            title="Supplier Outstanding"
-            amount={reportData.totalSupplierDues}
+            title="Credit Issued"
+            amount={reportData.totalCreditIssued}
+            icon={CreditCard}
+            colorScheme="amber"
+            subtitle="Udhaar tabs in period"
+          />
+
+          <StatCard
+            title="Credit Collected"
+            amount={reportData.totalCreditCollected}
+            icon={CheckCircle2}
+            colorScheme="emerald"
+            subtitle="Installments received"
+          />
+
+          <StatCard
+            title="Customer Outstanding"
+            amount={reportData.currentOutstandingCredit}
             icon={Users}
-            colorScheme="violet"
-            badge={reportData.totalSupplierDues > 0 ? "Payable" : undefined}
-            subtitle="Total pending vendor dues"
-          />
-
-          <StatCard
-            title="Stock Valuation"
-            amount={reportData.totalInventoryValue}
-            icon={Package}
-            colorScheme="blue"
-            subtitle={`${reportData.totalProductsCount} active products`}
-          />
-
-          <StatCard
-            title="Stock Attention"
-            amount={reportData.lowStockProductsCount + reportData.outOfStockProductsCount}
-            icon={AlertTriangle}
-            colorScheme={
-              reportData.outOfStockProductsCount > 0
-                ? "rose"
-                : reportData.lowStockProductsCount > 0
-                ? "amber"
-                : "emerald"
-            }
-            isRawString={true}
-            badge={
-              reportData.outOfStockProductsCount > 0
-                ? `${reportData.outOfStockProductsCount} Out`
-                : reportData.lowStockProductsCount > 0
-                ? `${reportData.lowStockProductsCount} Low`
-                : "Optimal"
-            }
-            subtitle={`${reportData.lowStockProductsCount} low · ${reportData.outOfStockProductsCount} empty`}
+            colorScheme={reportData.currentOutstandingCredit > 0 ? "rose" : "emerald"}
+            badge={reportData.currentOverdueCredit > 0 ? `${formatINR(reportData.currentOverdueCredit)} Overdue` : undefined}
+            subtitle="Current total unpaid debt"
           />
         </div>
       )}
@@ -314,8 +312,8 @@ export default function ShopReportsPage() {
 
         {/* Collection Channel Breakdown */}
         <ChartCard
-          title="Collection Channel Breakdown"
-          subtitle="Proportion of cash drawer vs online QR and POS card payments"
+          title="Daily Sales Channel Split"
+          subtitle="Proportion of counter cash drawer vs online QR and POS card payments"
         >
           {reportData.paymentSplit.every((p) => p.value === 0) ? (
             <div className="w-full h-72 flex items-center justify-center text-xs text-slate-400">
@@ -357,154 +355,135 @@ export default function ShopReportsPage() {
 
       {/* 6-Month Combined Trend */}
       <ChartCard
-        title="6-Month Trajectory: Revenue vs Stock vs Costs"
-        subtitle="Monthly revenue compared against inventory procurement and overheads"
+        title="6-Month Trajectory: Revenue vs Stock Purchases vs Expenses"
+        subtitle="Monthly revenue compared against inventory procurement and operating overheads"
       >
         <MonthlyRevenueBarChart data={reportData.monthlyRevenueTrend} />
       </ChartCard>
 
-      {/* Period Stock Movement Summary Card */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
-          <div>
-            <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-              <Boxes className="h-4 w-4 text-amber-500" />
-              Stock Movement Activity Summary
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Cost-based inventory inflows and outflows recorded during the selected period
-            </p>
-          </div>
-          <span className="text-xs font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-full">
-            {reportData.stockMovementSummary.movementsCount} Total Movement Entries
-          </span>
+      {/* Customer Credit / Udhaar Analytics Section (Phase 8) */}
+      <div className="space-y-4">
+        <div className="border-b border-slate-200 dark:border-slate-800 pb-2">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <CreditCard className="h-4 w-4 text-amber-500" />
+            Customer Credit & Collection Analytics
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Credit extended on tab vs collections settled by customers across payment channels
+          </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="p-4 rounded-xl border border-emerald-100 dark:border-emerald-950/60 bg-emerald-50/40 dark:bg-emerald-950/20">
-            <div className="flex items-center justify-between text-xs text-emerald-700 dark:text-emerald-400 font-semibold mb-1">
-              <span className="flex items-center gap-1">
-                <ArrowUpRight className="h-4 w-4" /> Stock Inflow (Added)
-              </span>
-              <span>{reportData.stockMovementSummary.stockAddedCount} batches</span>
-            </div>
-            <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400">
-              +{formatINR(reportData.stockMovementSummary.stockAddedValue)}
-            </p>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-              Opening stock, wholesale purchases & positive adjustments
-            </p>
-          </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 6-Month Customer Credit Trend Chart */}
+          <ChartCard
+            title="Customer Credit: Issued vs Collected Trend (6 Months)"
+            subtitle="Monthly comparison of new credit tabs given versus debt collected back"
+          >
+            {reportData.creditTrend.length === 0 ? (
+              <div className="w-full h-72 flex items-center justify-center text-xs text-slate-400">
+                No credit activity in the last 6 months.
+              </div>
+            ) : (
+              <CustomerCreditTrendChart data={reportData.creditTrend} />
+            )}
+          </ChartCard>
 
-          <div className="p-4 rounded-xl border border-rose-100 dark:border-rose-950/60 bg-rose-50/40 dark:bg-rose-950/20">
-            <div className="flex items-center justify-between text-xs text-rose-700 dark:text-rose-400 font-semibold mb-1">
-              <span className="flex items-center gap-1">
-                <ArrowDownRight className="h-4 w-4" /> Stock Outflow (Removed)
-              </span>
-              <span>{reportData.stockMovementSummary.stockRemovedCount} batches</span>
-            </div>
-            <p className="text-xl font-bold text-rose-600 dark:text-rose-400">
-              -{formatINR(reportData.stockMovementSummary.stockRemovedValue)}
-            </p>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-              Damage, spoilage, expiry & negative adjustments
-            </p>
-          </div>
-
-          <div className="p-4 rounded-xl border border-blue-100 dark:border-blue-950/60 bg-blue-50/40 dark:bg-blue-950/20">
-            <div className="flex items-center justify-between text-xs text-blue-700 dark:text-blue-400 font-semibold mb-1">
-              <span className="flex items-center gap-1">
-                <Package className="h-4 w-4" /> Net Movement Valuation
-              </span>
-              <span>Period Impact</span>
-            </div>
-            <p
-              className={cn(
-                "text-xl font-bold",
-                reportData.stockMovementSummary.netMovementValue >= 0
-                  ? "text-blue-600 dark:text-blue-400"
-                  : "text-amber-600 dark:text-amber-400"
-              )}
-            >
-              {reportData.stockMovementSummary.netMovementValue >= 0 ? "+" : ""}
-              {formatINR(reportData.stockMovementSummary.netMovementValue)}
-            </p>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
-              Net inventory balance change valued at cost
-            </p>
-          </div>
+          {/* Collection Methods Donut Chart */}
+          <ChartCard
+            title="Customer Repayment Collection Methods"
+            subtitle="Payment method distribution for credit collections settled at counter"
+          >
+            {reportData.collectionPaymentMethods.length === 0 ? (
+              <div className="w-full h-72 flex items-center justify-center text-xs text-slate-400">
+                No customer credit collections recorded for this period.
+              </div>
+            ) : (
+              <CashVsOnlineDonutChart data={reportData.collectionPaymentMethods} />
+            )}
+          </ChartCard>
         </div>
       </div>
 
-      {/* Category Inventory Breakdown Table */}
+      {/* Customer Outstanding Balance Ledger Table */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
         <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <div>
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">
-              Category Stock Valuation Breakdown
+            <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Users className="h-4 w-4 text-amber-500" />
+              Customer Outstanding Receivables Ledger
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Stock units and inventory valuation summarized by department category
+              Customer khata accounts ranked by largest outstanding balances
             </p>
           </div>
-          <span className="text-xs font-semibold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2.5 py-1 rounded-full border border-amber-200 dark:border-amber-800">
-            Total Holding: {formatINR(reportData.totalInventoryValue)}
+          <span className="text-xs font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 px-2.5 py-1 rounded-full border border-rose-200 dark:border-rose-800">
+            Total Receivables: {formatINR(reportData.currentOutstandingCredit)}
           </span>
         </div>
 
-        {reportData.inventoryCategories.length === 0 ? (
+        {reportData.customerOutstandingList.length === 0 ? (
           <div className="py-8 text-center text-xs text-slate-400">
-            No category inventory data available.
+            No customer credit balances recorded.
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-50/75 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-semibold uppercase tracking-wider">
                 <tr>
-                  <th className="py-3 px-4">Category</th>
-                  <th className="py-3 px-4 text-center">Products</th>
-                  <th className="py-3 px-4 text-right">Physical Stock Units</th>
-                  <th className="py-3 px-4 text-right">Inventory Value (Cost)</th>
-                  <th className="py-3 px-4 text-right">Share of Value</th>
+                  <th className="py-3 px-4">Customer Name</th>
+                  <th className="py-3 px-4">Phone</th>
+                  <th className="py-3 px-4 text-center">Tabs Count</th>
+                  <th className="py-3 px-4 text-right">Lifetime Credit</th>
+                  <th className="py-3 px-4 text-right text-emerald-600 dark:text-emerald-400">
+                    Collected
+                  </th>
+                  <th className="py-3 px-4 text-right text-rose-600 dark:text-rose-400">
+                    Net Outstanding
+                  </th>
+                  <th className="py-3 px-4">Oldest Due Date</th>
+                  <th className="py-3 px-4 text-center">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
-                {reportData.inventoryCategories.map((cat) => (
+                {reportData.customerOutstandingList.map((c, idx) => (
                   <tr
-                    key={cat.category}
+                    key={idx}
                     className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
                   >
-                    <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                      <span
-                        className="h-2.5 w-2.5 rounded-full shrink-0"
-                        style={{ backgroundColor: cat.color || "#F59E0B" }}
-                      />
-                      {cat.category}
+                    <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-white">
+                      {c.customerName}
+                    </td>
+                    <td className="py-3.5 px-4 text-slate-500">
+                      {c.phone ? (
+                        <a
+                          href={`tel:${c.phone}`}
+                          className="hover:text-amber-600 hover:underline"
+                        >
+                          {c.phone}
+                        </a>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td className="py-3.5 px-4 text-center text-slate-600 dark:text-slate-400 font-semibold">
-                      {cat.productCount}
+                      <span className="bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full">
+                        {c.creditsCount} tabs
+                      </span>
                     </td>
-                    <td className="py-3.5 px-4 text-right font-medium text-slate-700 dark:text-slate-300">
-                      {cat.totalStockUnits.toLocaleString()} units
+                    <td className="py-3.5 px-4 text-right font-semibold text-slate-900 dark:text-white">
+                      {formatINR(c.totalCredit)}
                     </td>
-                    <td className="py-3.5 px-4 text-right font-bold text-slate-900 dark:text-white">
-                      {formatINR(cat.inventoryValue)}
+                    <td className="py-3.5 px-4 text-right font-semibold text-emerald-600 dark:text-emerald-400">
+                      {formatINR(c.totalReceived)}
                     </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="w-16 bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                          <div
-                            className="h-full rounded-full"
-                            style={{
-                              width: `${Math.min(100, Math.max(0, cat.percentage))}%`,
-                              backgroundColor: cat.color || "#F59E0B",
-                            }}
-                          />
-                        </div>
-                        <span className="font-semibold text-slate-700 dark:text-slate-300 w-10 text-right">
-                          {cat.percentage}%
-                        </span>
-                      </div>
+                    <td className="py-3.5 px-4 text-right font-bold text-rose-600 dark:text-rose-400">
+                      {formatINR(c.outstanding)}
+                    </td>
+                    <td className="py-3.5 px-4 text-slate-500">
+                      {c.oldestDueDate ? formatDate(c.oldestDueDate) : "No due date"}
+                    </td>
+                    <td className="py-3.5 px-4 text-center">
+                      <StatusBadge status={c.status} />
                     </td>
                   </tr>
                 ))}
@@ -518,7 +497,8 @@ export default function ShopReportsPage() {
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
         <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <div>
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Users className="h-4 w-4 text-slate-500" />
               Supplier Outstanding Balance Ledger
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
@@ -592,21 +572,20 @@ export default function ShopReportsPage() {
         )}
       </div>
 
-      {/* Accounting & COGS Notice Box */}
+      {/* Accounting & Revenue Recognition Notice */}
       <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/60 shadow-sm flex items-start gap-3.5 text-xs text-slate-600 dark:text-slate-400">
         <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 shrink-0 mt-0.5">
           <Lock className="h-4 w-4" />
         </div>
         <div>
           <p className="font-bold text-slate-900 dark:text-white text-sm">
-            Profit & Loss Accounting Note
+            Revenue Recognition & Receivable Accounting Note
           </p>
           <p className="mt-0.5 leading-relaxed">
-            Pan Shop stock purchases represent inventory assets rather than immediate operational expenses. Profit calculation requires full Cost of Goods Sold (COGS) tracking to correctly match items sold with their unit procurement cost. True Gross Margin and Net Profit statements will be enabled in Phase 8 after product inventory valuation is active.
+            Customer Credit (Udhaar) represents an Accounts Receivable asset rather than immediate cash income. Repayments represent debt collection and are not double-counted as new daily sales revenue. Profit & Loss calculations will properly combine daily counter sales, inventory cost of goods sold (COGS), and shop expenses in Phase 9.
           </p>
         </div>
       </div>
     </div>
   );
 }
-

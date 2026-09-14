@@ -14,6 +14,7 @@ import {
   mapDbDailySaleToUi,
   calculateOnlineSales,
 } from "./sales";
+import { calculateCreditReceived } from "./customer-credit";
 
 export interface ShopRecentActivityItem {
   id: string;
@@ -21,8 +22,16 @@ export interface ShopRecentActivityItem {
   time: string;
   amount: number;
   method: string;
-  type: "sales" | "purchase" | "payment" | "expense";
+  type: "sales" | "purchase" | "payment" | "expense" | "credit_given" | "credit_collected";
   date: string;
+}
+
+export interface OutstandingDebtorSummary {
+  customerName: string;
+  phone?: string;
+  pendingAmount: number;
+  oldestDueDate?: string;
+  status: "Pending" | "Partial" | "Paid" | "Overdue";
 }
 
 export interface ShopDashboardData {
@@ -36,6 +45,13 @@ export interface ShopDashboardData {
   pendingSupplierPayments: number;
   isTodayRecorded: boolean;
   todaySale: DailySale | null;
+
+  // Customer Credit / Udhaar (Phase 8)
+  customerCreditOutstanding: number;
+  customerCreditOverdue: number;
+  customerCreditReceivedThisMonth: number;
+  customerCreditPendingCount: number;
+  topOutstandingCustomers: OutstandingDebtorSummary[];
 
   // Inventory metrics (Phase 7)
   totalInventoryValue: number;
@@ -92,7 +108,7 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
   const windowStartDate = recent6Months[0]?.startDate || prevMonthRange.startDate;
 
   try {
-    // 1. Parallel fetch across Daily Sales, Purchases, Supplier Payments, Shop Expenses, and Products
+    // 1. Parallel fetch across Daily Sales, Purchases, Supplier Payments, Shop Expenses, Inventory, and Customer Credits
     const [
       salesWindowRes,
       totalSalesCountRes,
@@ -102,10 +118,14 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
       allPaymentsSumRes,
       expensesWindowRes,
       productsRes,
+      creditsRes,
+      paymentsMonthRes,
       recentActivitySalesRes,
       recentActivityPurchasesRes,
       recentActivityPaymentsRes,
       recentActivityExpensesRes,
+      recentActivityCreditsRes,
+      recentActivityCreditPaymentsRes,
     ] = await Promise.all([
       // Sales window
       supabase
@@ -165,6 +185,21 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
         .eq("workspace_id", workspaceId)
         .eq("is_active", true),
 
+      // Customer Credits with payments
+      supabase
+        .from("customer_credits")
+        .select("id, customer_name, phone, original_amount, credit_date, due_date, status, is_archived, customer_credit_payments(amount, payment_date)")
+        .eq("workspace_id", workspaceId)
+        .neq("is_archived", true),
+
+      // Customer Credit Payments in current month
+      supabase
+        .from("customer_credit_payments")
+        .select("amount, payment_date, customer_credits!inner(workspace_id)")
+        .eq("customer_credits.workspace_id", workspaceId)
+        .gte("payment_date", currentMonthRange.startDate)
+        .lte("payment_date", currentMonthRange.endDate),
+
       // Recent 5 sales
       supabase
         .from("daily_sales")
@@ -197,7 +232,91 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
         .eq("type", "expense")
         .order("transaction_date", { ascending: false })
         .limit(5),
+
+      // Recent 5 customer credits
+      supabase
+        .from("customer_credits")
+        .select("id, customer_name, original_amount, credit_date")
+        .eq("workspace_id", workspaceId)
+        .neq("is_archived", true)
+        .order("credit_date", { ascending: false })
+        .limit(5),
+
+      // Recent 5 customer repayments
+      supabase
+        .from("customer_credit_payments")
+        .select("id, amount, payment_date, payment_method, customer_credits!inner(customer_name, workspace_id)")
+        .eq("customer_credits.workspace_id", workspaceId)
+        .order("payment_date", { ascending: false })
+        .limit(5),
     ]);
+
+    // Customer Credit Calculations
+    const rawCredits = creditsRes.data || [];
+    let customerCreditOutstanding = 0;
+    let customerCreditOverdue = 0;
+    const debtorMap = new Map<
+      string,
+      { customerName: string; phone?: string; pending: number; oldestDueDate?: string }
+    >();
+
+    for (const cred of rawCredits) {
+      const orig = Number(cred.original_amount || 0);
+      const payments = (cred.customer_credit_payments || []) as Array<{ amount: number }>;
+      const received = calculateCreditReceived(payments);
+      const remaining = Math.max(0, Math.round((orig - received) * 100) / 100);
+
+      if (remaining > 0) {
+        customerCreditOutstanding += remaining;
+
+        if (cred.due_date && cred.due_date < todayStr) {
+          customerCreditOverdue += remaining;
+        }
+
+        const key = cred.customer_name.trim().toLowerCase();
+        const existing = debtorMap.get(key) || {
+          customerName: cred.customer_name.trim(),
+          phone: cred.phone || undefined,
+          pending: 0,
+          oldestDueDate: undefined,
+        };
+
+        existing.pending += remaining;
+        if (cred.due_date) {
+          if (!existing.oldestDueDate || cred.due_date < existing.oldestDueDate) {
+            existing.oldestDueDate = cred.due_date;
+          }
+        }
+        debtorMap.set(key, existing);
+      }
+    }
+
+    customerCreditOutstanding = Math.round(customerCreditOutstanding * 100) / 100;
+    customerCreditOverdue = Math.round(customerCreditOverdue * 100) / 100;
+
+    const customerCreditReceivedThisMonth = (paymentsMonthRes.data || []).reduce(
+      (sum, p) => sum + Number(p.amount || 0),
+      0
+    );
+
+    const topOutstandingCustomers: OutstandingDebtorSummary[] = Array.from(debtorMap.values())
+      .map((d) => {
+        let status: "Pending" | "Partial" | "Paid" | "Overdue" = "Pending";
+        if (d.pending <= 0) {
+          status = "Paid";
+        } else if (d.oldestDueDate && d.oldestDueDate < todayStr) {
+          status = "Overdue";
+        }
+        return {
+          customerName: d.customerName,
+          phone: d.phone,
+          pendingAmount: Math.round(d.pending * 100) / 100,
+          oldestDueDate: d.oldestDueDate,
+          status,
+        };
+      })
+      .sort((a, b) => b.pendingAmount - a.pendingAmount)
+      .slice(0, 5);
 
     // Inventory Calculations
     const rawProducts = productsRes.data || [];
@@ -440,11 +559,11 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
       };
     });
 
-    // 9. Mixed Activity Feed: Daily Sales, Purchases, Payments, Expenses
+    // 9. Mixed Activity Feed: Daily Sales, Purchases, Payments, Expenses, and Customer Credit Events
     const combinedActivity: ShopRecentActivityItem[] = [];
 
     // Sales
-    (recentActivitySalesRes.data || []).forEach((sale: any) => {
+    (recentActivitySalesRes.data || []).forEach((sale) => {
       const saleUi = mapDbDailySaleToUi(sale);
       const topMethod =
         saleUi.cashSales >= saleUi.upiSales
@@ -463,8 +582,8 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
     });
 
     // Purchases
-    (recentActivityPurchasesRes.data || []).forEach((p: any) => {
-      const supplierName = (p.suppliers as any)?.name || "Wholesale Distributor";
+    (recentActivityPurchasesRes.data || []).forEach((p) => {
+      const supplierName = (p.suppliers as { name?: string } | null)?.name || "Wholesale Distributor";
       combinedActivity.push({
         id: `pur-${p.id}`,
         title: `Purchase from ${supplierName}`,
@@ -477,8 +596,8 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
     });
 
     // Supplier Payments
-    (recentActivityPaymentsRes.data || []).forEach((sp: any) => {
-      const supplierName = (sp.suppliers as any)?.name || "Supplier";
+    (recentActivityPaymentsRes.data || []).forEach((sp) => {
+      const supplierName = (sp.suppliers as { name?: string } | null)?.name || "Supplier";
       combinedActivity.push({
         id: `spay-${sp.id}`,
         title: `Paid ${supplierName}`,
@@ -491,7 +610,7 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
     });
 
     // Shop Expenses
-    (recentActivityExpensesRes.data || []).forEach((exp: any) => {
+    (recentActivityExpensesRes.data || []).forEach((exp) => {
       combinedActivity.push({
         id: `exp-${exp.id}`,
         title: exp.name || "Shop Operating Expense",
@@ -500,6 +619,33 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
         method: exp.payment_method || "UPI",
         type: "expense",
         date: exp.transaction_date,
+      });
+    });
+
+    // Customer Credit Issued (Udhaar Tab)
+    (recentActivityCreditsRes.data || []).forEach((cred) => {
+      combinedActivity.push({
+        id: `cred-${cred.id}`,
+        title: `Credit tab for ${cred.customer_name}`,
+        time: formatDate(cred.credit_date),
+        amount: Number(cred.original_amount || 0),
+        method: "Khata Book",
+        type: "credit_given",
+        date: cred.credit_date,
+      });
+    });
+
+    // Customer Repayments Collected
+    (recentActivityCreditPaymentsRes.data || []).forEach((cpay) => {
+      const custName = (cpay.customer_credits as { customer_name?: string } | null)?.customer_name || "Customer";
+      combinedActivity.push({
+        id: `cpay-${cpay.id}`,
+        title: `Payment from ${custName}`,
+        time: formatDate(cpay.payment_date),
+        amount: Number(cpay.amount || 0),
+        method: cpay.payment_method || "Cash",
+        type: "credit_collected",
+        date: cpay.payment_date,
       });
     });
 
@@ -520,6 +666,11 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
       pendingSupplierPayments,
       isTodayRecorded,
       todaySale,
+      customerCreditOutstanding,
+      customerCreditOverdue,
+      customerCreditReceivedThisMonth: Math.round(customerCreditReceivedThisMonth * 100) / 100,
+      customerCreditPendingCount: debtorMap.size,
+      topOutstandingCustomers,
       totalInventoryValue: Math.round(totalInventoryValue * 100) / 100,
       totalProductsCount: rawProducts.length,
       lowStockCount,
@@ -550,6 +701,11 @@ export async function getShopDashboardData(workspaceId: string): Promise<ShopDas
       pendingSupplierPayments: 0,
       isTodayRecorded: false,
       todaySale: null,
+      customerCreditOutstanding: 0,
+      customerCreditOverdue: 0,
+      customerCreditReceivedThisMonth: 0,
+      customerCreditPendingCount: 0,
+      topOutstandingCustomers: [],
       totalInventoryValue: 0,
       totalProductsCount: 0,
       lowStockCount: 0,

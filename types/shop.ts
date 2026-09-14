@@ -131,16 +131,22 @@ export interface Supplier {
 
 export interface CustomerCreditPayment {
   id: string;
+  userId?: string;
+  customerCreditId?: string;
   date: string;
   amount: number;
   paymentMethod: PaymentMethod;
   notes?: string;
+  createdAt?: string;
 }
 
 export interface CustomerCredit {
   id: string;
+  workspaceId?: string;
+  userId?: string;
   customerName: string;
   phone?: string;
+  creditDate?: string;
   creditAmount: number;
   amountReceived: number;
   remainingAmount: number;
@@ -148,8 +154,88 @@ export interface CustomerCredit {
   dueDate?: string;
   status: CustomerCreditStatus;
   notes?: string;
+  isArchived?: boolean;
+  isOverdue?: boolean;
+  dueDateStatus?: string;
+  settledDate?: string;
+  createdAt?: string;
+  updatedAt?: string;
   payments?: CustomerCreditPayment[];
 }
+
+export interface CustomerCreditInput {
+  workspaceId: string;
+  customerName: string;
+  phone?: string;
+  creditAmount: number;
+  creditDate?: string;
+  dueDate?: string;
+  notes?: string;
+  initialPayment?: number;
+  paymentMethod?: PaymentMethod;
+}
+
+export interface CustomerCreditUpdateInput {
+  id: string;
+  customerName: string;
+  phone?: string;
+  creditAmount: number;
+  creditDate?: string;
+  dueDate?: string;
+  notes?: string;
+}
+
+export interface CustomerCreditPaymentInput {
+  creditId: string;
+  amount: number;
+  date?: string;
+  paymentMethod?: PaymentMethod;
+  notes?: string;
+}
+
+export interface CustomerCreditPaymentUpdateInput {
+  paymentId: string;
+  amount: number;
+  date?: string;
+  paymentMethod?: PaymentMethod;
+  notes?: string;
+}
+
+export interface CustomerOutstandingSummary {
+  customerName: string;
+  phone?: string;
+  totalCredit: number;
+  totalReceived: number;
+  outstanding: number;
+  creditsCount: number;
+  oldestDueDate?: string;
+  status: CustomerCreditStatus;
+  lastPaymentDate?: string;
+}
+
+export interface CustomerCreditSummary {
+  totalOutstanding: number;
+  totalReceivedThisMonth: number;
+  totalOverdue: number;
+  pendingCustomersCount: number;
+  totalCreditExtended: number;
+  totalCollected: number;
+  totalActiveCredits: number;
+  overdueCreditsCount: number;
+}
+
+export type CustomerCreditSortOption =
+  | "newest"
+  | "oldest"
+  | "highest-credit"
+  | "lowest-credit"
+  | "highest-remaining"
+  | "due-soon"
+  | "most-overdue"
+  | "customer-az";
+
+export type CustomerCreditFilterStatus = "all" | "pending" | "partial" | "paid" | "overdue";
+export type CustomerCreditDueFilter = "all" | "overdue" | "due-today" | "upcoming" | "no-due-date";
 
 export interface ProfitLossSummary {
   period: "daily" | "weekly" | "monthly" | "yearly";
