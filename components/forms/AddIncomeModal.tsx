@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -8,7 +8,10 @@ import { Modal } from "@/components/shared/Modal";
 import { HomeIncomeItem, HomeIncomeCategory } from "@/types/home";
 import { PaymentMethod } from "@/types/common";
 import { toISODateString } from "@/lib/date";
+import { createHomeTransaction } from "@/lib/data/home/transactions";
+import { getAuthenticatedHomeWorkspace } from "@/lib/data/home/workspace";
 import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
 
 const incomeSchema = z.object({
   source: z.string().min(2, "Income source is required"),
@@ -24,15 +27,18 @@ type IncomeFormValues = z.infer<typeof incomeSchema>;
 export interface AddIncomeModalProps {
   isOpen: boolean;
   onClose: () => void;
+  workspaceId?: string;
   onSuccess?: (income: HomeIncomeItem) => void;
 }
 
-export function AddIncomeModal({ isOpen, onClose, onSuccess }: AddIncomeModalProps) {
+export function AddIncomeModal({ isOpen, onClose, workspaceId: propWsId, onSuccess }: AddIncomeModalProps) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<IncomeFormValues>({
     resolver: zodResolver(incomeSchema),
     defaultValues: {
@@ -45,24 +51,59 @@ export function AddIncomeModal({ isOpen, onClose, onSuccess }: AddIncomeModalPro
     },
   });
 
-  const onSubmit = (data: IncomeFormValues) => {
-    const newIncome: HomeIncomeItem = {
-      id: `inc-${Date.now()}`,
-      source: data.source,
-      category: data.category as HomeIncomeCategory,
-      amount: Number(data.amount),
-      paymentMethod: data.paymentMethod as PaymentMethod,
-      date: data.date,
-      notes: data.notes,
-    };
+  const onSubmit = async (data: IncomeFormValues) => {
+    setIsSubmitting(true);
+    try {
+      let wsId = propWsId;
+      if (!wsId) {
+        const authWs = await getAuthenticatedHomeWorkspace();
+        if (authWs) wsId = authWs.workspaceId;
+      }
 
-    if (onSuccess) {
-      onSuccess(newIncome);
+      if (!wsId) {
+        toast.error("Home workspace could not be identified.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      const res = await createHomeTransaction(wsId, {
+        name: data.source,
+        type: "income",
+        category: data.category,
+        amount: Number(data.amount),
+        paymentMethod: data.paymentMethod,
+        date: data.date,
+        notes: data.notes,
+      });
+
+      if (!res.success || !res.transaction) {
+        toast.error(res.error || "Failed to record income.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      const newIncome: HomeIncomeItem = {
+        id: res.transaction.id,
+        source: res.transaction.name,
+        category: data.category as HomeIncomeCategory,
+        amount: res.transaction.amount,
+        paymentMethod: res.transaction.paymentMethod,
+        date: res.transaction.date,
+        notes: res.transaction.notes,
+      };
+
+      toast.success(`Income of ₹${data.amount} from "${data.source}" recorded!`);
+      if (onSuccess) {
+        onSuccess(newIncome);
+      }
+      reset();
+      onClose();
+    } catch (err: any) {
+      console.error("Error creating income:", err);
+      toast.error(err?.message || "Failed to record income.");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    toast.success(`Income of ₹${data.amount} from "${data.source}" recorded!`);
-    reset();
-    onClose();
   };
 
   return (
@@ -163,15 +204,17 @@ export function AddIncomeModal({ isOpen, onClose, onSuccess }: AddIncomeModalPro
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            disabled={isSubmitting}
+            className="rounded-lg border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSubmitting}
-            className="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer"
+            className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer disabled:opacity-50"
           >
+            {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Save Income
           </button>
         </div>
@@ -179,3 +222,4 @@ export function AddIncomeModal({ isOpen, onClose, onSuccess }: AddIncomeModalPro
     </Modal>
   );
 }
+

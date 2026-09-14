@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { StatCard } from "@/components/shared/StatCard";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { FilterDropdown } from "@/components/shared/FilterDropdown";
 import { DateFilter } from "@/components/shared/DateFilter";
@@ -11,103 +12,200 @@ import { DataTablePagination } from "@/components/shared/DataTablePagination";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { AddTransactionModal } from "@/components/forms/AddTransactionModal";
-import { formatDate } from "@/lib/date";
-import { mockHomeTransactions } from "@/data/home/transactions";
+import { Modal } from "@/components/shared/Modal";
+import { SkeletonCard, SkeletonTable } from "@/components/shared/SkeletonCard";
+import { formatDate, getDateRangeFromPreset } from "@/lib/date";
+import { formatINR } from "@/lib/currency";
 import { HomeTransaction } from "@/types/home";
 import { DateRangeFilter } from "@/types/common";
-import { Plus, Edit2, Trash2, Eye, ArrowLeftRight, Filter } from "lucide-react";
+import { Category } from "@/lib/supabase/types";
+import {
+  getHomeTransactions,
+  deleteHomeTransaction,
+  HomeTransactionsSummary,
+} from "@/lib/data/home/transactions";
+import { getHomeCategories } from "@/lib/data/home/categories";
+import { getAuthenticatedHomeWorkspace } from "@/lib/data/home/workspace";
+import {
+  Plus,
+  Edit2,
+  Trash2,
+  Eye,
+  ArrowLeftRight,
+  RefreshCw,
+  Wallet,
+  TrendingDown,
+  PiggyBank,
+  Receipt,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
-import { Modal } from "@/components/shared/Modal";
+import { cn } from "@/lib/utils";
 
 export default function HomeTransactionsPage() {
-  const [transactions, setTransactions] = useState<HomeTransaction[]>(mockHomeTransactions);
+  const [workspaceId, setWorkspaceId] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Transactions data & pagination
+  const [transactions, setTransactions] = useState<HomeTransaction[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 10;
+
+  // Aggregate summary
+  const [summary, setSummary] = useState<HomeTransactionsSummary>({
+    totalIncome: 0,
+    totalExpense: 0,
+    netSavings: 0,
+    totalCount: 0,
+  });
+
+  // Categories list for filter dropdown
+  const [categories, setCategories] = useState<Category[]>([]);
+
+  // Filter states
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [methodFilter, setMethodFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState<DateRangeFilter>("this-month");
 
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 8;
-
-  // Modals & Drawers
+  // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<HomeTransaction | null>(null);
   const [viewingTransaction, setViewingTransaction] = useState<HomeTransaction | null>(null);
   const [deletingTransaction, setDeletingTransaction] = useState<HomeTransaction | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  // Filtered transactions
-  const filteredTransactions = useMemo(() => {
-    return transactions.filter((tx) => {
-      // Search
-      const matchesSearch =
-        tx.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (tx.notes && tx.notes.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        tx.category.toLowerCase().includes(searchQuery.toLowerCase());
-
-      // Type
-      const matchesType = typeFilter === "all" || tx.type.toLowerCase() === typeFilter.toLowerCase();
-
-      // Category
-      const matchesCategory =
-        categoryFilter === "all" || tx.category.toLowerCase() === categoryFilter.toLowerCase();
-
-      // Payment Method
-      const matchesMethod =
-        methodFilter === "all" || tx.paymentMethod.toLowerCase() === methodFilter.toLowerCase();
-
-      return matchesSearch && matchesType && matchesCategory && matchesMethod;
-    });
-  }, [transactions, searchQuery, typeFilter, categoryFilter, methodFilter]);
-
-  const totalPages = Math.ceil(filteredTransactions.length / pageSize);
-  const paginatedTransactions = filteredTransactions.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
-  );
-
-  const handleAddOrEditSuccess = (savedTx: HomeTransaction) => {
-    if (editingTransaction) {
-      setTransactions((prev) =>
-        prev.map((item) => (item.id === savedTx.id ? savedTx : item))
-      );
-      setEditingTransaction(null);
-    } else {
-      setTransactions((prev) => [savedTx, ...prev]);
+  // Load Categories
+  const loadCategories = useCallback(async (wsId: string) => {
+    try {
+      const cats = await getHomeCategories(wsId);
+      setCategories(cats);
+    } catch (err) {
+      console.error("Failed to load categories:", err);
     }
+  }, []);
+
+  // Fetch transactions from Supabase
+  const loadTransactions = useCallback(async () => {
+    try {
+      let targetWsId = workspaceId;
+      if (!targetWsId) {
+        const authWs = await getAuthenticatedHomeWorkspace();
+        if (!authWs) {
+          setLoading(false);
+          return;
+        }
+        targetWsId = authWs.workspaceId;
+        setWorkspaceId(targetWsId);
+        loadCategories(targetWsId);
+      }
+
+      const dateRange = getDateRangeFromPreset(dateFilter);
+
+      const res = await getHomeTransactions({
+        workspaceId: targetWsId,
+        page: currentPage,
+        pageSize,
+        search: searchQuery,
+        type: typeFilter === "all" ? undefined : (typeFilter as "income" | "expense"),
+        categoryId: categoryFilter === "all" ? undefined : categoryFilter,
+        paymentMethod: methodFilter === "all" ? undefined : methodFilter,
+        startDate: dateRange.startDate,
+        endDate: dateRange.endDate,
+      });
+
+      setTransactions(res.transactions);
+      setTotalCount(res.totalCount);
+      setSummary(res.summary);
+    } catch (err) {
+      console.error("Error loading home transactions:", err);
+      toast.error("Failed to load transactions from database.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [
+    workspaceId,
+    currentPage,
+    pageSize,
+    searchQuery,
+    typeFilter,
+    categoryFilter,
+    methodFilter,
+    dateFilter,
+    loadCategories,
+  ]);
+
+  useEffect(() => {
+    loadTransactions();
+  }, [loadTransactions]);
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadTransactions();
   };
 
-  const handleDeleteConfirm = () => {
-    if (deletingTransaction) {
-      setTransactions((prev) => prev.filter((item) => item.id !== deletingTransaction.id));
+  const handleAddOrEditSuccess = () => {
+    setIsAddModalOpen(false);
+    setEditingTransaction(null);
+    loadTransactions();
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deletingTransaction) return;
+    setIsDeleting(true);
+    try {
+      const result = await deleteHomeTransaction(deletingTransaction.id);
+      if (!result.success) {
+        toast.error(result.error || "Failed to delete transaction.");
+        setIsDeleting(false);
+        return;
+      }
+
       toast.success(`Transaction "${deletingTransaction.name}" deleted.`);
       setDeletingTransaction(null);
+      loadTransactions();
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to delete transaction.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
-  // Categories list
-  const categoryOptions = [
-    { label: "Kitchen", value: "kitchen" },
-    { label: "Petrol", value: "petrol" },
-    { label: "Wi-Fi", value: "wi-fi" },
-    { label: "Salary", value: "salary" },
-    { label: "Medical", value: "medical" },
-    { label: "Electricity", value: "electricity" },
-    { label: "Entertainment", value: "entertainment" },
-    { label: "Gas", value: "gas" },
-    { label: "Mobile Recharge", value: "mobile recharge" },
-    { label: "EMI", value: "emi" },
-    { label: "Shopping", value: "shopping" },
-    { label: "Freelance", value: "freelance" },
-    { label: "Interest", value: "interest" },
-  ];
+  const handleResetFilters = () => {
+    setSearchQuery("");
+    setTypeFilter("all");
+    setCategoryFilter("all");
+    setMethodFilter("all");
+    setDateFilter("this-month");
+    setCurrentPage(1);
+  };
+
+  const hasActiveFilters =
+    searchQuery.trim() !== "" ||
+    typeFilter !== "all" ||
+    categoryFilter !== "all" ||
+    methodFilter !== "all" ||
+    dateFilter !== "this-month";
+
+  // Category filter dropdown options
+  const categoryOptions = useMemo(() => {
+    return categories.map((cat) => ({
+      label: cat.icon ? `${cat.icon} ${cat.name}` : cat.name,
+      value: cat.id,
+    }));
+  }, [categories]);
 
   const paymentMethodOptions = [
-    { label: "UPI", value: "upi" },
-    { label: "Cash", value: "cash" },
-    { label: "Bank", value: "bank" },
-    { label: "Credit Card", value: "credit card" },
+    { label: "UPI", value: "UPI" },
+    { label: "Cash", value: "Cash" },
+    { label: "Bank Account", value: "Bank" },
+    { label: "Credit Card", value: "Credit Card" },
+    { label: "Debit Card", value: "Debit Card" },
+    { label: "Other", value: "Other" },
   ];
 
   const typeOptions = [
@@ -115,28 +213,89 @@ export default function HomeTransactionsPage() {
     { label: "Expense (-)", value: "expense" },
   ];
 
+  const totalPages = Math.ceil(totalCount / pageSize) || 1;
+
   return (
     <div className="space-y-6">
+      {/* Page Header */}
       <PageHeader
         title="Transactions Management"
         description="View, search, filter, and manage your complete household income and expense history."
         badge="🏠 Home Workspace"
       >
-        <button
-          type="button"
-          onClick={() => {
-            setEditingTransaction(null);
-            setIsAddModalOpen(true);
-          }}
-          className="flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition-all cursor-pointer"
-        >
-          <Plus className="h-4 w-4" /> Add Transaction
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={refreshing || loading}
+            className="flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+            title="Refresh Transactions"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setEditingTransaction(null);
+              setIsAddModalOpen(true);
+            }}
+            className="flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition-all cursor-pointer"
+          >
+            <Plus className="h-4 w-4" /> Add Transaction
+          </button>
+        </div>
       </PageHeader>
 
-      {/* Top Filter Bar */}
+      {/* Summary KPI Cards */}
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard
+            title="Total Inflow (Income)"
+            amount={summary.totalIncome}
+            icon={Wallet}
+            colorScheme="emerald"
+            subtitle="Total earnings in selected period"
+          />
+
+          <StatCard
+            title="Total Outflow (Expenses)"
+            amount={summary.totalExpense}
+            icon={TrendingDown}
+            colorScheme="rose"
+            subtitle="Total spending in selected period"
+          />
+
+          <StatCard
+            title="Net Period Balance"
+            amount={summary.netSavings}
+            icon={PiggyBank}
+            colorScheme={summary.netSavings >= 0 ? "blue" : "rose"}
+            formula={`${formatINR(summary.totalIncome)} - ${formatINR(summary.totalExpense)}`}
+          />
+
+          <StatCard
+            title="Total Entries"
+            amount={String(summary.totalCount)}
+            isRawString
+            icon={Receipt}
+            colorScheme="indigo"
+            subtitle={`${transactions.length} shown on this page`}
+          />
+        </div>
+      )}
+
+      {/* Filter and Search Bar */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 shadow-sm space-y-3">
-        <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+        <div className="flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
           {/* Search Bar */}
           <SearchInput
             value={searchQuery}
@@ -152,7 +311,10 @@ export default function HomeTransactionsPage() {
           <div className="flex flex-wrap items-center gap-2">
             <DateFilter
               value={dateFilter}
-              onChange={(val) => setDateFilter(val)}
+              onChange={(val) => {
+                setDateFilter(val);
+                setCurrentPage(1);
+              }}
             />
 
             <FilterDropdown
@@ -165,15 +327,17 @@ export default function HomeTransactionsPage() {
               options={typeOptions}
             />
 
-            <FilterDropdown
-              label="Categories"
-              value={categoryFilter}
-              onChange={(val) => {
-                setCategoryFilter(val);
-                setCurrentPage(1);
-              }}
-              options={categoryOptions}
-            />
+            {categoryOptions.length > 0 && (
+              <FilterDropdown
+                label="Categories"
+                value={categoryFilter}
+                onChange={(val) => {
+                  setCategoryFilter(val);
+                  setCurrentPage(1);
+                }}
+                options={categoryOptions}
+              />
+            )}
 
             <FilterDropdown
               label="Methods"
@@ -184,23 +348,55 @@ export default function HomeTransactionsPage() {
               }}
               options={paymentMethodOptions}
             />
+
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition-colors cursor-pointer"
+                title="Reset all filters"
+              >
+                <X className="h-3.5 w-3.5" /> Reset
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       {/* Transactions Data Table */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
-        {paginatedTransactions.length === 0 ? (
+        <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+              Transaction Register
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Live household entries recorded in Supabase
+            </p>
+          </div>
+          <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-800">
+            {totalCount} {totalCount === 1 ? "Record" : "Records"}
+          </span>
+        </div>
+
+        {loading ? (
+          <div className="p-6">
+            <SkeletonTable rows={8} cols={7} />
+          </div>
+        ) : transactions.length === 0 ? (
           <EmptyState
             title="No transactions found"
             description={
-              searchQuery || typeFilter !== "all" || categoryFilter !== "all"
+              hasActiveFilters
                 ? "Try adjusting your search criteria or resetting filters."
                 : "Record your first personal or household income/expense entry to get started."
             }
             icon={ArrowLeftRight}
             actionLabel="Add Transaction"
-            onAction={() => setIsAddModalOpen(true)}
+            onAction={() => {
+              setEditingTransaction(null);
+              setIsAddModalOpen(true);
+            }}
           />
         ) : (
           <div className="overflow-x-auto">
@@ -217,7 +413,7 @@ export default function HomeTransactionsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
-                {paginatedTransactions.map((tx) => (
+                {transactions.map((tx) => (
                   <tr
                     key={tx.id}
                     className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors"
@@ -296,11 +492,11 @@ export default function HomeTransactionsPage() {
         )}
 
         {/* Pagination Footer */}
-        {filteredTransactions.length > 0 && (
+        {transactions.length > 0 && (
           <DataTablePagination
             currentPage={currentPage}
             totalPages={totalPages}
-            totalItems={filteredTransactions.length}
+            totalItems={totalCount}
             pageSize={pageSize}
             onPageChange={setCurrentPage}
           />
@@ -310,6 +506,7 @@ export default function HomeTransactionsPage() {
       {/* Add / Edit Transaction Modal */}
       <AddTransactionModal
         isOpen={isAddModalOpen}
+        workspaceId={workspaceId}
         onClose={() => {
           setIsAddModalOpen(false);
           setEditingTransaction(null);
@@ -329,7 +526,7 @@ export default function HomeTransactionsPage() {
           <div className="space-y-4 text-xs">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <span className="text-slate-400">Transaction ID</span>
-              <span className="font-mono text-slate-600 dark:text-slate-300">
+              <span className="font-mono text-slate-600 dark:text-slate-300 text-[11px] truncate max-w-[180px]">
                 {viewingTransaction.id}
               </span>
             </div>
@@ -389,11 +586,23 @@ export default function HomeTransactionsPage() {
               </div>
             )}
 
-            <div className="pt-3">
+            <div className="flex items-center gap-2 pt-3">
+              <button
+                type="button"
+                onClick={() => {
+                  const tx = viewingTransaction;
+                  setViewingTransaction(null);
+                  setEditingTransaction(tx);
+                  setIsAddModalOpen(true);
+                }}
+                className="flex-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 py-2 text-xs font-semibold text-white transition-colors cursor-pointer"
+              >
+                Edit
+              </button>
               <button
                 type="button"
                 onClick={() => setViewingTransaction(null)}
-                className="w-full rounded-lg bg-slate-100 dark:bg-slate-800 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                className="rounded-lg bg-slate-100 dark:bg-slate-800 py-2 px-4 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
               >
                 Close
               </button>
@@ -409,9 +618,10 @@ export default function HomeTransactionsPage() {
         onConfirm={handleDeleteConfirm}
         title="Delete Transaction"
         message={`Are you sure you want to delete "${deletingTransaction?.name}"? This action cannot be undone.`}
-        confirmLabel="Delete"
+        confirmLabel={isDeleting ? "Deleting..." : "Delete"}
         isDestructive
       />
     </div>
   );
 }
+

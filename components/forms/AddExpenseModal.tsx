@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -8,7 +8,10 @@ import { Modal } from "@/components/shared/Modal";
 import { HomeExpenseItem, HomeExpenseCategory } from "@/types/home";
 import { PaymentMethod } from "@/types/common";
 import { toISODateString } from "@/lib/date";
+import { createHomeTransaction } from "@/lib/data/home/transactions";
+import { getAuthenticatedHomeWorkspace } from "@/lib/data/home/workspace";
 import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
 
 const expenseSchema = z.object({
   title: z.string().min(2, "Expense title is required"),
@@ -24,6 +27,7 @@ type ExpenseFormValues = z.infer<typeof expenseSchema>;
 export interface AddExpenseModalProps {
   isOpen: boolean;
   onClose: () => void;
+  workspaceId?: string;
   onSuccess?: (expense: HomeExpenseItem) => void;
 }
 
@@ -47,12 +51,14 @@ const expenseCategories: HomeExpenseCategory[] = [
   "Other",
 ];
 
-export function AddExpenseModal({ isOpen, onClose, onSuccess }: AddExpenseModalProps) {
+export function AddExpenseModal({ isOpen, onClose, workspaceId: propWsId, onSuccess }: AddExpenseModalProps) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<ExpenseFormValues>({
     resolver: zodResolver(expenseSchema),
     defaultValues: {
@@ -65,24 +71,59 @@ export function AddExpenseModal({ isOpen, onClose, onSuccess }: AddExpenseModalP
     },
   });
 
-  const onSubmit = (data: ExpenseFormValues) => {
-    const newExpense: HomeExpenseItem = {
-      id: `exp-${Date.now()}`,
-      title: data.title,
-      category: data.category as HomeExpenseCategory,
-      amount: Number(data.amount),
-      paymentMethod: data.paymentMethod as PaymentMethod,
-      date: data.date,
-      notes: data.notes,
-    };
+  const onSubmit = async (data: ExpenseFormValues) => {
+    setIsSubmitting(true);
+    try {
+      let wsId = propWsId;
+      if (!wsId) {
+        const authWs = await getAuthenticatedHomeWorkspace();
+        if (authWs) wsId = authWs.workspaceId;
+      }
 
-    if (onSuccess) {
-      onSuccess(newExpense);
+      if (!wsId) {
+        toast.error("Home workspace could not be identified.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      const res = await createHomeTransaction(wsId, {
+        name: data.title,
+        type: "expense",
+        category: data.category,
+        amount: Number(data.amount),
+        paymentMethod: data.paymentMethod,
+        date: data.date,
+        notes: data.notes,
+      });
+
+      if (!res.success || !res.transaction) {
+        toast.error(res.error || "Failed to record expense.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      const newExpense: HomeExpenseItem = {
+        id: res.transaction.id,
+        title: res.transaction.name,
+        category: data.category as HomeExpenseCategory,
+        amount: res.transaction.amount,
+        paymentMethod: res.transaction.paymentMethod,
+        date: res.transaction.date,
+        notes: res.transaction.notes,
+      };
+
+      toast.success(`Expense of ₹${data.amount} for "${data.title}" saved!`);
+      if (onSuccess) {
+        onSuccess(newExpense);
+      }
+      reset();
+      onClose();
+    } catch (err: any) {
+      console.error("Error creating expense:", err);
+      toast.error(err?.message || "Failed to record expense.");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    toast.success(`Expense of ₹${data.amount} for "${data.title}" saved!`);
-    reset();
-    onClose();
   };
 
   return (
@@ -184,15 +225,17 @@ export function AddExpenseModal({ isOpen, onClose, onSuccess }: AddExpenseModalP
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            disabled={isSubmitting}
+            className="rounded-lg border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSubmitting}
-            className="rounded-lg bg-rose-600 hover:bg-rose-700 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer"
+            className="flex items-center gap-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 px-5 py-2 text-xs font-semibold text-white shadow-sm cursor-pointer disabled:opacity-50"
           >
+            {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             Save Expense
           </button>
         </div>
@@ -200,3 +243,4 @@ export function AddExpenseModal({ isOpen, onClose, onSuccess }: AddExpenseModalP
     </Modal>
   );
 }
+

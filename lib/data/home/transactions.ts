@@ -16,12 +16,20 @@ export interface GetHomeTransactionsOptions {
   endDate?: string;
 }
 
+export interface HomeTransactionsSummary {
+  totalIncome: number;
+  totalExpense: number;
+  netSavings: number;
+  totalCount: number;
+}
+
 export interface HomeTransactionsResult {
   transactions: HomeTransaction[];
   totalCount: number;
   page: number;
   pageSize: number;
   totalPages: number;
+  summary: HomeTransactionsSummary;
 }
 
 export interface CreateHomeTransactionInput {
@@ -99,16 +107,23 @@ export function mapDbTransactionToUi(
 }
 
 /**
- * Fetch filtered, paginated transactions for a Home workspace.
+ * Fetch filtered, paginated transactions for a Home workspace along with aggregate KPI summaries.
  */
 export async function getHomeTransactions(
   options: GetHomeTransactionsOptions
 ): Promise<HomeTransactionsResult> {
   const supabase = createClient();
   const page = Math.max(1, options.page || 1);
-  const pageSize = Math.max(1, options.pageSize || 20);
+  const pageSize = Math.max(1, options.pageSize || 10);
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
+
+  const emptySummary: HomeTransactionsSummary = {
+    totalIncome: 0,
+    totalExpense: 0,
+    netSavings: 0,
+    totalCount: 0,
+  };
 
   try {
     let query = supabase
@@ -116,66 +131,98 @@ export async function getHomeTransactions(
       .select("*, categories(id, name, icon)", { count: "exact" })
       .eq("workspace_id", options.workspaceId);
 
+    let sumQuery = supabase
+      .from("transactions")
+      .select("type, amount")
+      .eq("workspace_id", options.workspaceId);
+
     // Filter by type
     if (options.type && options.type !== "all") {
-      query = query.eq("type", options.type.toLowerCase() as "income" | "expense");
+      const dbType = options.type.toLowerCase() as "income" | "expense";
+      query = query.eq("type", dbType);
+      sumQuery = sumQuery.eq("type", dbType);
     }
 
     // Filter by Category ID
     if (options.categoryId && options.categoryId !== "all") {
       query = query.eq("category_id", options.categoryId);
+      sumQuery = sumQuery.eq("category_id", options.categoryId);
     }
 
     // Filter by Payment Method
     if (options.paymentMethod && options.paymentMethod !== "all") {
       const dbMethod = uiToDbPaymentMethod(options.paymentMethod);
       query = query.eq("payment_method", dbMethod);
+      sumQuery = sumQuery.eq("payment_method", dbMethod);
     }
 
     // Filter by Date Range
     if (options.startDate) {
       query = query.gte("transaction_date", options.startDate);
+      sumQuery = sumQuery.gte("transaction_date", options.startDate);
     }
     if (options.endDate) {
       query = query.lte("transaction_date", options.endDate);
+      sumQuery = sumQuery.lte("transaction_date", options.endDate);
     }
 
     // Search by Name or Notes (case-insensitive)
     if (options.search && options.search.trim()) {
       const term = options.search.trim();
       query = query.or(`name.ilike.%${term}%,notes.ilike.%${term}%`);
+      sumQuery = sumQuery.or(`name.ilike.%${term}%,notes.ilike.%${term}%`);
     }
 
-    // Sort newest first
+    // Sort newest first & range
     query = query
       .order("transaction_date", { ascending: false })
       .order("created_at", { ascending: false })
       .range(from, to);
 
-    const { data, error, count } = await query;
+    const [listRes, sumRes] = await Promise.all([query, sumQuery]);
 
-    if (error) {
-      console.error("Error fetching home transactions:", error.message);
+    if (listRes.error) {
+      console.error("Error fetching home transactions:", listRes.error.message);
       return {
         transactions: [],
         totalCount: 0,
         page,
         pageSize,
         totalPages: 0,
+        summary: emptySummary,
       };
     }
 
-    let items = (data || []).map((row: any) => mapDbTransactionToUi(row));
+    let items = (listRes.data || []).map((row: any) => mapDbTransactionToUi(row));
 
-    // If filtered by category name client-side or joined (in case category name filter was passed)
+    // If filtered by category name client-side
     if (options.categoryName && options.categoryName !== "all") {
       items = items.filter(
         (t) => t.category.toLowerCase() === options.categoryName!.toLowerCase()
       );
     }
 
-    const totalCount = count || items.length;
-    const totalPages = Math.ceil(totalCount / pageSize);
+    const totalCount = listRes.count !== null ? listRes.count : items.length;
+    const totalPages = Math.ceil(totalCount / pageSize) || 1;
+
+    // Calculate aggregated summary
+    let totalIncome = 0;
+    let totalExpense = 0;
+    for (const r of sumRes.data || []) {
+      const amt = Number(r.amount) || 0;
+      if (r.type === "income") {
+        totalIncome += amt;
+      } else if (r.type === "expense") {
+        totalExpense += amt;
+      }
+    }
+
+    const summary: HomeTransactionsSummary = {
+      totalIncome: Math.round(totalIncome),
+      totalExpense: Math.round(totalExpense),
+      netSavings: Math.round(totalIncome - totalExpense),
+      totalCount,
+    };
 
     return {
       transactions: items,
@@ -183,6 +230,7 @@ export async function getHomeTransactions(
       page,
       pageSize,
       totalPages,
+      summary,
     };
   } catch (err) {
     console.error("Unexpected error in getHomeTransactions:", err);
@@ -192,6 +240,7 @@ export async function getHomeTransactions(
       page,
       pageSize,
       totalPages: 0,
+      summary: emptySummary,
     };
   }
 }
@@ -250,6 +299,25 @@ export async function createHomeTransaction(
 
       if (cat) {
         categoryId = cat.id;
+      } else {
+        // Auto-create category if doesn't exist
+        const { data: newCat } = await supabase
+          .from("categories")
+          .insert({
+            user_id: user.id,
+            workspace_id: workspaceId,
+            name: input.category.trim(),
+            type: normalizedType,
+            icon: normalizedType === "income" ? "💰" : "🏷️",
+            is_default: false,
+            is_active: true,
+          })
+          .select("id")
+          .single();
+
+        if (newCat) {
+          categoryId = newCat.id;
+        }
       }
     }
 
@@ -332,6 +400,28 @@ export async function updateHomeTransaction(
       const { data: cat } = await catQuery.maybeSingle();
       if (cat) {
         updatePayload.category_id = cat.id;
+      } else {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (user) {
+          const { data: newCat } = await supabase
+            .from("categories")
+            .insert({
+              user_id: user.id,
+              workspace_id: workspaceId,
+              name: input.category.trim(),
+              type: effectiveType || "expense",
+              icon: (effectiveType || "expense") === "income" ? "💰" : "🏷️",
+              is_default: false,
+              is_active: true,
+            })
+            .select("id")
+            .single();
+          if (newCat) {
+            updatePayload.category_id = newCat.id;
+          }
+        }
       }
     }
 
@@ -373,3 +463,4 @@ export async function deleteHomeTransaction(
     return { success: false, error: err?.message || "Failed to delete transaction." };
   }
 }
+

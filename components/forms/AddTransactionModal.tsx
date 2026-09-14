@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -8,7 +8,11 @@ import { Modal } from "@/components/shared/Modal";
 import { HomeTransaction } from "@/types/home";
 import { PaymentMethod, TransactionType } from "@/types/common";
 import { toISODateString } from "@/lib/date";
+import { createHomeTransaction, updateHomeTransaction } from "@/lib/data/home/transactions";
+import { getHomeCategories } from "@/lib/data/home/categories";
+import { getAuthenticatedHomeWorkspace } from "@/lib/data/home/workspace";
 import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
 
 const transactionSchema = z.object({
   name: z.string().min(2, "Transaction name is required (min 2 chars)"),
@@ -25,13 +29,14 @@ type TransactionFormValues = z.infer<typeof transactionSchema>;
 export interface AddTransactionModalProps {
   isOpen: boolean;
   onClose: () => void;
+  workspaceId?: string;
   onSuccess?: (transaction: HomeTransaction) => void;
   initialData?: HomeTransaction | null;
 }
 
-const expenseCategories = [
+const defaultExpenseCategories = [
   "Kitchen",
-  "Grocery",
+  "Groceries",
   "Electricity",
   "Gas",
   "Wi-Fi",
@@ -45,32 +50,37 @@ const expenseCategories = [
   "Entertainment",
   "Education",
   "Travel",
-  "Bills",
   "Other",
 ];
 
-const incomeCategories = [
+const defaultIncomeCategories = [
   "Salary",
   "Bonus",
   "Freelance",
   "Interest",
   "Business Income",
-  "Other",
+  "Other Income",
 ];
 
 export function AddTransactionModal({
   isOpen,
   onClose,
+  workspaceId: propWorkspaceId,
   onSuccess,
   initialData,
 }: AddTransactionModalProps) {
+  const [resolvedWorkspaceId, setResolvedWorkspaceId] = useState<string>(propWorkspaceId || "");
+  const [expenseCategories, setExpenseCategories] = useState<string[]>(defaultExpenseCategories);
+  const [incomeCategories, setIncomeCategories] = useState<string[]>(defaultIncomeCategories);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const {
     register,
     handleSubmit,
     watch,
     setValue,
     reset,
-    formState: { errors, isSubmitting },
+    formState: { errors },
   } = useForm<TransactionFormValues>({
     resolver: zodResolver(transactionSchema),
     defaultValues: {
@@ -85,6 +95,44 @@ export function AddTransactionModal({
   });
 
   const selectedType = watch("type");
+
+  // Resolve workspace and load categories
+  useEffect(() => {
+    let isMounted = true;
+    async function initCategories() {
+      try {
+        let wsId = propWorkspaceId;
+        if (!wsId) {
+          const authWs = await getAuthenticatedHomeWorkspace();
+          if (authWs) {
+            wsId = authWs.workspaceId;
+            if (isMounted) setResolvedWorkspaceId(authWs.workspaceId);
+          }
+        } else {
+          if (isMounted) setResolvedWorkspaceId(wsId);
+        }
+
+        if (wsId) {
+          const cats = await getHomeCategories(wsId);
+          if (isMounted && cats.length > 0) {
+            const exp = cats.filter((c) => c.type === "expense").map((c) => c.name);
+            const inc = cats.filter((c) => c.type === "income").map((c) => c.name);
+            if (exp.length > 0) setExpenseCategories(exp);
+            if (inc.length > 0) setIncomeCategories(inc);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load categories in AddTransactionModal:", err);
+      }
+    }
+
+    if (isOpen) {
+      initCategories();
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, propWorkspaceId]);
 
   useEffect(() => {
     if (initialData) {
@@ -101,43 +149,89 @@ export function AddTransactionModal({
       reset({
         name: "",
         type: "Expense",
-        category: "Kitchen",
+        category: expenseCategories[0] || "Kitchen",
         amount: 0,
         paymentMethod: "UPI",
         date: toISODateString(),
         notes: "",
       });
     }
-  }, [initialData, isOpen, reset]);
+  }, [initialData, isOpen, reset, expenseCategories]);
 
   // Update default category when type changes
   const handleTypeChange = (type: TransactionType) => {
     setValue("type", type);
-    setValue("category", type === "Income" ? incomeCategories[0] : expenseCategories[0]);
+    setValue("category", type === "Income" ? incomeCategories[0] || "Salary" : expenseCategories[0] || "Kitchen");
   };
 
-  const onSubmit = (data: TransactionFormValues) => {
-    const newTx: HomeTransaction = {
-      id: initialData ? initialData.id : `tx-${Date.now()}`,
-      name: data.name,
-      type: data.type,
-      category: data.category as any,
-      amount: Number(data.amount),
-      paymentMethod: data.paymentMethod as PaymentMethod,
-      date: data.date,
-      notes: data.notes,
-    };
+  const onSubmit = async (data: TransactionFormValues) => {
+    setIsSubmitting(true);
+    try {
+      let wsId = resolvedWorkspaceId || propWorkspaceId;
+      if (!wsId) {
+        const authWs = await getAuthenticatedHomeWorkspace();
+        if (authWs) {
+          wsId = authWs.workspaceId;
+          setResolvedWorkspaceId(authWs.workspaceId);
+        }
+      }
 
-    if (onSuccess) {
-      onSuccess(newTx);
+      if (!wsId) {
+        toast.error("Home workspace could not be identified.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (initialData) {
+        // Edit existing transaction
+        const result = await updateHomeTransaction(initialData.id, wsId, {
+          name: data.name,
+          type: data.type,
+          category: data.category,
+          amount: Number(data.amount),
+          paymentMethod: data.paymentMethod,
+          date: data.date,
+          notes: data.notes,
+        });
+
+        if (!result.success || !result.transaction) {
+          toast.error(result.error || "Failed to update transaction.");
+          setIsSubmitting(false);
+          return;
+        }
+
+        toast.success(`Transaction "${data.name}" updated successfully!`);
+        if (onSuccess) onSuccess(result.transaction);
+      } else {
+        // Create new transaction
+        const result = await createHomeTransaction(wsId, {
+          name: data.name,
+          type: data.type,
+          category: data.category,
+          amount: Number(data.amount),
+          paymentMethod: data.paymentMethod,
+          date: data.date,
+          notes: data.notes,
+        });
+
+        if (!result.success || !result.transaction) {
+          toast.error(result.error || "Failed to save transaction.");
+          setIsSubmitting(false);
+          return;
+        }
+
+        toast.success(`Transaction "${data.name}" added successfully!`);
+        if (onSuccess) onSuccess(result.transaction);
+      }
+
+      reset();
+      onClose();
+    } catch (err: any) {
+      console.error("Error submitting transaction:", err);
+      toast.error(err?.message || "An unexpected error occurred.");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    toast.success(
-      initialData
-        ? `Transaction "${data.name}" updated successfully!`
-        : `Transaction "${data.name}" added successfully!`
-    );
-    onClose();
   };
 
   return (
@@ -293,15 +387,17 @@ export function AddTransactionModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            disabled={isSubmitting}
+            className="rounded-lg border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSubmitting}
-            className="rounded-lg bg-emerald-600 hover:bg-emerald-700 px-5 py-2 text-xs font-semibold text-white shadow-sm transition-all cursor-pointer disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-5 py-2 text-xs font-semibold text-white shadow-sm transition-all cursor-pointer disabled:opacity-50"
           >
+            {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             {initialData ? "Save Changes" : "Add Transaction"}
           </button>
         </div>
@@ -309,3 +405,4 @@ export function AddTransactionModal({
     </Modal>
   );
 }
+

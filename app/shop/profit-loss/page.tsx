@@ -1,30 +1,95 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { StatCard } from "@/components/shared/StatCard";
 import { ChartCard } from "@/components/shared/ChartCard";
 import { ProfitTrendChart } from "@/components/charts/ProfitTrendChart";
-import { mockProfitLossSummaries, mockProfitTrend } from "@/data/shop/profit-loss";
+import { SkeletonCard } from "@/components/shared/SkeletonCard";
 import { formatINR } from "@/lib/currency";
+import { formatDate } from "@/lib/date";
+import {
+  getShopProfitLossData,
+  ShopProfitLossData,
+  ProfitLossPeriod,
+} from "@/lib/data/shop/profit-loss";
+import { getAuthenticatedShopWorkspace } from "@/lib/data/shop/workspace";
 import {
   LineChart,
   DollarSign,
   TrendingDown,
   Percent,
   Calculator,
-  ArrowRight,
-  Sparkles,
+  RefreshCw,
   Info,
+  Calendar,
+  Sparkles,
+  ArrowRight,
+  PlusCircle,
+  TrendingUp,
 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
-export default function ShopProfitLossPage() {
-  const [period, setPeriod] = useState<"daily" | "weekly" | "monthly" | "yearly">("monthly");
+const PERIOD_LABELS: Record<ProfitLossPeriod, string> = {
+  daily: "Today",
+  weekly: "This Week",
+  monthly: "This Month",
+  yearly: "This Year",
+};
 
-  const summary = mockProfitLossSummaries[period] || mockProfitLossSummaries.monthly;
-  const grossMargin = Math.round((summary.grossProfit / (summary.revenue || 1)) * 100);
-  const netMargin = Math.round((summary.netProfit / (summary.revenue || 1)) * 100);
+export default function ShopProfitLossPage() {
+  const [workspaceId, setWorkspaceId] = useState<string>("");
+  const [period, setPeriod] = useState<ProfitLossPeriod>("monthly");
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [data, setData] = useState<ShopProfitLossData | null>(null);
+
+  const loadData = useCallback(async () => {
+    try {
+      let targetWsId = workspaceId;
+      if (!targetWsId) {
+        const authWs = await getAuthenticatedShopWorkspace();
+        if (!authWs) {
+          setLoading(false);
+          return;
+        }
+        targetWsId = authWs.workspaceId;
+        setWorkspaceId(targetWsId);
+      }
+
+      const res = await getShopProfitLossData(targetWsId, period);
+      setData(res);
+    } catch (err) {
+      console.error("Failed to load shop profit & loss data:", err);
+      toast.error("Unable to load profit & loss statement.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [workspaceId, period]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    loadData();
+  };
+
+  const summary = data?.summary || {
+    period,
+    revenue: 0,
+    cogs: 0,
+    grossProfit: 0,
+    shopExpenses: 0,
+    netProfit: 0,
+  };
+
+  const grossMargin = data?.grossMargin ?? 0;
+  const netMargin = data?.netMargin ?? 0;
 
   return (
     <div className="space-y-6">
@@ -33,35 +98,60 @@ export default function ShopProfitLossPage() {
         description="Analyze gross profitability based on Cost of Goods Sold (COGS) and final net earnings after operating expenses."
         badge="🏪 Pan Shop Workspace"
       >
-        {/* Period Selector Tabs */}
-        <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-          {(["daily", "weekly", "monthly", "yearly"] as const).map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => setPeriod(p)}
-              className={cn(
-                "px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all capitalize cursor-pointer",
-                period === p
-                  ? "bg-amber-600 text-white shadow-xs"
-                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
-              )}
-            >
-              {p}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Period Selector Tabs */}
+          <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xs">
+            {(["daily", "weekly", "monthly", "yearly"] as const).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPeriod(p)}
+                className={cn(
+                  "px-3 py-1.5 text-xs font-bold rounded-lg transition-all capitalize cursor-pointer",
+                  period === p
+                    ? "bg-amber-600 text-white shadow-xs"
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+                )}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+
+          {/* Refresh Button */}
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={refreshing || loading}
+            className="flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+            title="Refresh Statement"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
         </div>
       </PageHeader>
 
       {/* Architecture Notice Banner */}
       <div className="rounded-xl border border-blue-500/20 bg-blue-50/50 dark:bg-blue-950/20 p-4 flex items-start gap-3">
-        <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 shrink-0">
+        <div className="p-1.5 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5">
           <Info className="h-4 w-4" />
         </div>
         <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">
-          <p className="font-bold text-slate-900 dark:text-white">
-            Standard Financial Accounting Principle Applied
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-bold text-slate-900 dark:text-white">
+              Standard Financial Accounting Principle Applied
+            </p>
+            {data?.dateRange && (
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-blue-700 dark:text-blue-300 bg-blue-100/70 dark:bg-blue-900/60 px-2 py-0.5 rounded-md">
+                <Calendar className="h-3 w-3" />
+                {formatDate(data.dateRange.startDate)}
+                {data.dateRange.startDate !== data.dateRange.endDate && (
+                  <> &ndash; {formatDate(data.dateRange.endDate)}</>
+                )}
+              </span>
+            )}
+          </div>
           <p>
             Profit in CashNest is calculated using <strong>Cost of Goods Sold (COGS)</strong> rather
             than bulk stock purchase outflows. This ensures purchasing excess inventory does not falsely
@@ -71,49 +161,93 @@ export default function ShopProfitLossPage() {
       </div>
 
       {/* 5 Core Financial Metrics Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <StatCard
-          title="Total Revenue"
-          amount={summary.revenue}
-          icon={DollarSign}
-          colorScheme="emerald"
-          subtitle={`${period} gross retail sales`}
-        />
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <StatCard
+            title="Total Revenue"
+            amount={summary.revenue}
+            icon={DollarSign}
+            colorScheme="emerald"
+            subtitle={`${PERIOD_LABELS[period]} gross retail sales`}
+          />
 
-        <StatCard
-          title="Cost of Goods (COGS)"
-          amount={summary.cogs}
-          icon={TrendingDown}
-          colorScheme="amber"
-          subtitle="Wholesale product cost"
-        />
+          <StatCard
+            title="Cost of Goods (COGS)"
+            amount={summary.cogs}
+            icon={TrendingDown}
+            colorScheme="amber"
+            subtitle="Wholesale product cost"
+          />
 
-        <StatCard
-          title="Gross Profit"
-          amount={summary.grossProfit}
-          icon={Percent}
-          colorScheme="blue"
-          badge={`${grossMargin}% Margin`}
-          formula="Revenue - COGS = Gross Profit"
-        />
+          <StatCard
+            title="Gross Profit"
+            amount={summary.grossProfit}
+            icon={Percent}
+            colorScheme="blue"
+            badge={`${grossMargin}% Margin`}
+            formula="Revenue - COGS = Gross Profit"
+          />
 
-        <StatCard
-          title="Shop Operating Expenses"
-          amount={summary.shopExpenses}
-          icon={TrendingDown}
-          colorScheme="rose"
-          subtitle="Rent, power, wages & SIM"
-        />
+          <StatCard
+            title="Shop Operating Expenses"
+            amount={summary.shopExpenses}
+            icon={TrendingDown}
+            colorScheme="rose"
+            subtitle="Rent, power, wages & SIM"
+          />
 
-        <StatCard
-          title="Final Net Profit"
-          amount={summary.netProfit}
-          icon={LineChart}
-          colorScheme="indigo"
-          badge={`${netMargin}% Net`}
-          formula="Gross Profit - Expenses = Net Profit"
-        />
-      </div>
+          <StatCard
+            title="Final Net Profit"
+            amount={summary.netProfit}
+            icon={LineChart}
+            colorScheme="indigo"
+            badge={`${netMargin}% Net`}
+            formula="Gross Profit - Expenses = Net Profit"
+          />
+        </div>
+      )}
+
+      {/* Quick Setup / Zero-State Reminder if No Activity */}
+      {!loading && !data?.hasData && (
+        <div className="rounded-xl border border-amber-200 dark:border-amber-800/60 bg-amber-50/50 dark:bg-amber-950/20 p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-xl bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-300 shrink-0">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                No Sales or Overhead Recorded for {PERIOD_LABELS[period]}
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                Log your daily cash drawer tally, wholesale stock purchases, or utility expenses to generate live profit calculations.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Link
+              href="/shop/daily-sales"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors shadow-xs"
+            >
+              <PlusCircle className="h-3.5 w-3.5" />
+              Add Daily Sales
+            </Link>
+            <Link
+              href="/shop/expenses"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold transition-colors shadow-xs"
+            >
+              Add Expense
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Visual Step-by-Step Profit Breakdown Cards */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -194,10 +328,17 @@ export default function ShopProfitLossPage() {
 
       {/* Profit Trajectory Chart */}
       <ChartCard
-        title="Profitability Trajectory Across Months"
-        subtitle="Gross profit margin vs final net profit trend for 2026"
+        title="Profitability Trajectory Across Recent Months"
+        subtitle="Historical trend of Gross Profit vs final Net Profit"
       >
-        <ProfitTrendChart data={mockProfitTrend} />
+        {data?.profitTrend && data.profitTrend.length > 0 ? (
+          <ProfitTrendChart data={data.profitTrend} />
+        ) : (
+          <div className="w-full h-72 flex flex-col items-center justify-center text-xs text-slate-400 gap-2">
+            <TrendingUp className="h-8 w-8 text-slate-300 dark:text-slate-700" />
+            <p>No historical monthly data recorded yet.</p>
+          </div>
+        )}
       </ChartCard>
     </div>
   );
