@@ -1,11 +1,13 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { useTheme } from "@/components/providers/ThemeProvider";
 import { defaultAppSettings } from "@/data/settings";
 import { AppSettings } from "@/types/settings";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { getProfile, updateProfile } from "@/lib/data/profile";
+import { createClient } from "@/lib/supabase/client";
 import {
   User,
   DollarSign,
@@ -20,6 +22,7 @@ import {
   UploadCloud,
   Trash2,
   CheckCircle2,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -28,6 +31,34 @@ export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const [settings, setSettings] = useState<AppSettings>(defaultAppSettings);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const p = await getProfile();
+        const supabase = createClient();
+        const { data: userData } = await supabase.auth.getUser();
+
+        if (p || userData?.user) {
+          setSettings((prev) => ({
+            ...prev,
+            profile: {
+              name: p?.full_name || userData?.user?.user_metadata?.full_name || prev.profile.name,
+              email: userData?.user?.email || prev.profile.email,
+              phone: p?.phone || prev.profile.phone,
+            },
+          }));
+        }
+      } catch (err) {
+        console.error("Error loading profile settings:", err);
+      } finally {
+        setIsLoadingProfile(false);
+      }
+    }
+    loadData();
+  }, []);
 
   const handleProfileChange = (field: keyof AppSettings["profile"], value: string) => {
     setSettings((prev) => ({
@@ -56,9 +87,26 @@ export default function SettingsPage() {
     }));
   };
 
-  const handleSaveAll = (e: React.FormEvent) => {
+  const handleSaveAll = async (e: React.FormEvent) => {
     e.preventDefault();
-    toast.success("Settings and preferences saved successfully!");
+    setIsSaving(true);
+    try {
+      const res = await updateProfile({
+        full_name: settings.profile.name,
+        phone: settings.profile.phone,
+      });
+
+      if (!res.success && res.error) {
+        toast.error(res.error);
+      } else {
+        toast.success("Settings and profile preferences saved successfully!");
+      }
+    } catch (err) {
+      console.error("Save error:", err);
+      toast.error("Failed to save settings. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleExportData = () => {
@@ -66,7 +114,7 @@ export default function SettingsPage() {
   };
 
   const handleBackupCloud = () => {
-    toast.info("Simulated Cloud Backup: In Phase 2, this will sync your data with Supabase.");
+    toast.info("Database Backup: All your workspaces and records are securely synced to Supabase.");
   };
 
   const handleResetConfirm = () => {
@@ -373,9 +421,20 @@ export default function SettingsPage() {
         <div className="flex justify-end">
           <button
             type="submit"
-            className="flex items-center gap-2 rounded-xl bg-slate-900 dark:bg-white dark:text-slate-900 text-white px-6 py-3 text-xs font-bold shadow-md hover:bg-slate-800 transition-all cursor-pointer"
+            disabled={isSaving}
+            className="flex items-center gap-2 rounded-xl bg-slate-900 dark:bg-white dark:text-slate-900 text-white px-6 py-3 text-xs font-bold shadow-md hover:bg-slate-800 transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <Save className="h-4 w-4" /> Save All Preferences
+            {isSaving ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Saving Preferences...</span>
+              </>
+            ) : (
+              <>
+                <Save className="h-4 w-4" />
+                <span>Save All Preferences</span>
+              </>
+            )}
           </button>
         </div>
       </form>

@@ -1,13 +1,16 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useWorkspace } from "@/components/providers/WorkspaceProvider";
 import { useTheme } from "@/components/providers/ThemeProvider";
 import { getTodayDisplayDate } from "@/lib/date";
 import { mockNotifications } from "@/data/settings";
 import { Modal } from "@/components/shared/Modal";
 import { Drawer } from "@/components/shared/Drawer";
+import { getProfile } from "@/lib/data/profile";
+import { createClient } from "@/lib/supabase/client";
+import { Profile } from "@/lib/supabase/types";
 import {
   Bell,
   Search,
@@ -21,6 +24,7 @@ import {
   CreditCard,
   ChevronDown,
   Sparkles,
+  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
@@ -32,6 +36,7 @@ export interface HeaderProps {
 
 export function Header({ onOpenMobileNav }: HeaderProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const { workspace, workspaceName, workspaceIcon } = useWorkspace();
   const { theme, setTheme, resolvedTheme } = useTheme();
 
@@ -40,9 +45,33 @@ export function Header({ onOpenMobileNav }: HeaderProps) {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
+  const [profile, setProfile] = useState<Profile | null>(null);
 
   const profileDropdownRef = useRef<HTMLDivElement>(null);
   const themeDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    async function loadUserProfile() {
+      try {
+        const p = await getProfile();
+        if (p) setProfile(p);
+      } catch (err) {
+        console.error("Failed to load header profile:", err);
+      }
+    }
+    loadUserProfile();
+
+    const supabase = createClient();
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      loadUserProfile();
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -56,6 +85,30 @@ export function Header({ onOpenMobileNav }: HeaderProps) {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  const handleLogout = async () => {
+    setIsProfileOpen(false);
+    try {
+      const supabase = createClient();
+      await supabase.auth.signOut();
+      toast.success("Logged out successfully.");
+      router.push("/login");
+      router.refresh();
+    } catch (err) {
+      console.error("Logout error:", err);
+      toast.error("Failed to log out. Please try again.");
+    }
+  };
+
+  const displayName = profile?.full_name || "Devanshu Joshi";
+  const displayEmail = profile?.user_id ? "Account Profile" : "devanshu@cashnest.app";
+  const userInitials = displayName
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "CN";
 
   // Format page title from pathname
   const getPageTitle = () => {
@@ -209,14 +262,16 @@ export function Header({ onOpenMobileNav }: HeaderProps) {
           </div>
 
           {/* User Profile Avatar & Dropdown */}
+          {/* User Profile Avatar & Dropdown */}
           <div className="relative" ref={profileDropdownRef}>
             <button
               type="button"
               onClick={() => setIsProfileOpen(!isProfileOpen)}
               className="flex items-center gap-2 rounded-full border border-slate-200 dark:border-slate-800 p-1 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              aria-label="User account menu"
             >
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 font-bold text-xs">
-                DJ
+                {userInitials}
               </div>
               <ChevronDown className="h-3 w-3 text-slate-400 mr-1 hidden sm:inline" />
             </button>
@@ -224,10 +279,12 @@ export function Header({ onOpenMobileNav }: HeaderProps) {
             {isProfileOpen && (
               <div className="absolute right-0 top-full mt-2 w-56 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2 shadow-xl z-50 animate-in fade-in zoom-in-95 duration-150">
                 <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 mb-1">
-                  <div className="font-bold text-sm text-slate-900 dark:text-white">
-                    Devanshu Joshi
+                  <div className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                    {displayName}
                   </div>
-                  <div className="text-xs text-slate-400">devanshu@cashnest.app</div>
+                  <div className="text-xs text-slate-400 truncate">
+                    {displayEmail}
+                  </div>
                 </div>
 
                 <Link
@@ -248,13 +305,11 @@ export function Header({ onOpenMobileNav }: HeaderProps) {
                 <div className="pt-1 mt-1 border-t border-slate-100 dark:border-slate-800">
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsProfileOpen(false);
-                      toast.info("Simulated logout successful.");
-                    }}
+                    onClick={handleLogout}
                     className="w-full flex items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors text-left cursor-pointer"
                   >
-                    Log out
+                    <LogOut className="h-4 w-4 text-rose-500" />
+                    <span>Log out</span>
                   </button>
                 </div>
               </div>
