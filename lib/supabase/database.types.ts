@@ -84,6 +84,7 @@ export interface Database {
           type: "income" | "expense";
           icon: string | null;
           is_default: boolean;
+          is_active: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -95,6 +96,7 @@ export interface Database {
           type: "income" | "expense";
           icon?: string | null;
           is_default?: boolean;
+          is_active?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -106,6 +108,7 @@ export interface Database {
           type?: "income" | "expense";
           icon?: string | null;
           is_default?: boolean;
+          is_active?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -185,6 +188,7 @@ export interface Database {
           person_name: string;
           phone: string | null;
           original_amount: number;
+          debt_date: string;
           due_date: string | null;
           notes: string | null;
           status: "unpaid" | "partial" | "paid" | "overdue";
@@ -199,6 +203,7 @@ export interface Database {
           person_name: string;
           phone?: string | null;
           original_amount: number;
+          debt_date?: string;
           due_date?: string | null;
           notes?: string | null;
           status?: "unpaid" | "partial" | "paid" | "overdue";
@@ -213,6 +218,7 @@ export interface Database {
           person_name?: string;
           phone?: string | null;
           original_amount?: number;
+          debt_date?: string;
           due_date?: string | null;
           notes?: string | null;
           status?: "unpaid" | "partial" | "paid" | "overdue";
@@ -755,6 +761,23 @@ export interface Database {
           p_user_id: string;
         };
         Returns: void;
+      };
+      record_debt_payment: {
+        Args: {
+          p_debt_id: string;
+          p_amount: number;
+          p_payment_date?: string;
+          p_payment_method?: string;
+          p_notes?: string | null;
+        };
+        Returns: {
+          payment_id: string;
+          debt_id: string;
+          amount: number;
+          total_paid: number;
+          remaining: number;
+          status: string;
+        };
       };
     };
     Enums: {

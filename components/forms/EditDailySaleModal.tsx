@@ -7,12 +7,11 @@ import * as z from "zod";
 import { Modal } from "@/components/shared/Modal";
 import { DailySale } from "@/types/shop";
 import { formatINR } from "@/lib/currency";
-import { toISODateString } from "@/lib/date";
-import { createDailySale, calculateDailySalesTotal } from "@/lib/data/shop/sales";
+import { updateDailySale, calculateDailySalesTotal } from "@/lib/data/shop/sales";
 import { toast } from "sonner";
 import { Calculator, Loader2 } from "lucide-react";
 
-const dailySaleSchema = z.object({
+const editDailySaleSchema = z.object({
   date: z.string().min(1, "Date is required"),
   cashSales: z.number().min(0, "Amount cannot be negative"),
   upiSales: z.number().min(0, "Amount cannot be negative"),
@@ -21,21 +20,21 @@ const dailySaleSchema = z.object({
   notes: z.string().optional(),
 });
 
-type DailySaleFormValues = z.infer<typeof dailySaleSchema>;
+type EditDailySaleFormValues = z.infer<typeof editDailySaleSchema>;
 
-export interface AddDailySaleModalProps {
+export interface EditDailySaleModalProps {
   isOpen: boolean;
   onClose: () => void;
+  sale: DailySale | null;
   onSuccess?: (sale: DailySale) => void;
-  initialDate?: string;
 }
 
-export function AddDailySaleModal({
+export function EditDailySaleModal({
   isOpen,
   onClose,
+  sale,
   onSuccess,
-  initialDate,
-}: AddDailySaleModalProps) {
+}: EditDailySaleModalProps) {
   const {
     register,
     handleSubmit,
@@ -43,10 +42,10 @@ export function AddDailySaleModal({
     reset,
     setError,
     formState: { errors, isSubmitting },
-  } = useForm<DailySaleFormValues>({
-    resolver: zodResolver(dailySaleSchema),
+  } = useForm<EditDailySaleFormValues>({
+    resolver: zodResolver(editDailySaleSchema),
     defaultValues: {
-      date: initialDate || toISODateString(),
+      date: "",
       cashSales: 0,
       upiSales: 0,
       cardSales: 0,
@@ -56,17 +55,17 @@ export function AddDailySaleModal({
   });
 
   useEffect(() => {
-    if (isOpen) {
+    if (sale && isOpen) {
       reset({
-        date: initialDate || toISODateString(),
-        cashSales: 0,
-        upiSales: 0,
-        cardSales: 0,
-        otherSales: 0,
-        notes: "",
+        date: sale.date,
+        cashSales: sale.cashSales,
+        upiSales: sale.upiSales,
+        cardSales: sale.cardSales,
+        otherSales: sale.otherSales,
+        notes: sale.notes || "",
       });
     }
-  }, [isOpen, initialDate, reset]);
+  }, [sale, isOpen, reset]);
 
   const cash = watch("cashSales") || 0;
   const upi = watch("upiSales") || 0;
@@ -80,7 +79,9 @@ export function AddDailySaleModal({
     Number(other)
   );
 
-  const onSubmit = async (data: DailySaleFormValues) => {
+  const onSubmit = async (data: EditDailySaleFormValues) => {
+    if (!sale) return;
+
     const cashVal = Number(data.cashSales) || 0;
     const upiVal = Number(data.upiSales) || 0;
     const cardVal = Number(data.cardSales) || 0;
@@ -94,7 +95,7 @@ export function AddDailySaleModal({
       return;
     }
 
-    const res = await createDailySale({
+    const res = await updateDailySale(sale.id, {
       date: data.date,
       cashSales: cashVal,
       upiSales: upiVal,
@@ -109,11 +110,10 @@ export function AddDailySaleModal({
     }
 
     if (res.data) {
-      toast.success(`Daily sales of ${formatINR(total)} saved successfully.`);
+      toast.success(`Sales for ${res.data.date} updated successfully.`);
       if (onSuccess) {
         onSuccess(res.data);
       }
-      reset();
       onClose();
     }
   };
@@ -122,8 +122,8 @@ export function AddDailySaleModal({
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Record Daily Sales"
-      description="Record counter cash, UPI QR code, and card POS swipe collections for the day."
+      title="Edit Daily Sales"
+      description="Update counter sales amounts or date for this daily closing entry."
       maxWidth="md"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -265,7 +265,7 @@ export function AddDailySaleModal({
             className="flex items-center gap-2 rounded-xl bg-amber-600 hover:bg-amber-700 px-5 py-2.5 text-xs font-semibold text-white shadow-sm transition-all cursor-pointer disabled:opacity-50"
           >
             {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            {isSubmitting ? "Saving..." : "Save Daily Sales"}
+            {isSubmitting ? "Updating..." : "Save Changes"}
           </button>
         </div>
       </form>
